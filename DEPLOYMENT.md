@@ -79,29 +79,48 @@ docker compose up -d
 # /etc/nginx/sites-available/hrms
 server {
     listen 80;
-    server_name your-domain.com;
+    server_name azarya.space www.azarya.space;
 
-    # Frontend (static files)
-    location / {
-        root /home/ubuntu/human_resources/frontend/dist;
-        try_files $uri $uri/ /index.html;
+    # Let's Encrypt ACME challenge - MUST come before other location blocks
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+        try_files $uri =404;
     }
 
-    # Backend API
-    location /api {
+    # Security headers (but not for ACME challenge)
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # Backend API - match /api/v1 prefix (must come before root location)
+    location /api/v1 {
         proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        
+        # Timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Frontend (static files) - must come last
+    location / {
+        root /home/ubuntu/hrms_larzo/frontend/dist;
+        try_files $uri $uri/ /index.html;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
     }
 }
 ```
 
-5. **Setup PM2 (Process Manager):**
+6. **Setup PM2 (Process Manager):**
 ```bash
 npm install -g pm2
 cd backend
@@ -110,10 +129,17 @@ pm2 startup
 pm2 save
 ```
 
-6. **Setup SSL (Free with Let's Encrypt):**
+7. **Setup SSL (Free with Let's Encrypt):**
 ```bash
 sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.com
+
+# Get certificate for both www and non-www domains
+sudo certbot --nginx -d azarya.space -d www.azarya.space
+
+# Certbot will automatically:
+# - Update nginx config for HTTPS
+# - Set up redirect from HTTP to HTTPS
+# - Configure auto-renewal
 ```
 
 **Cost:** $6-12/month + domain ($10-15/year)
