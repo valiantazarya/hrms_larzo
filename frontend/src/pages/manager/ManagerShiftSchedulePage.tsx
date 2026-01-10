@@ -5,7 +5,6 @@ import { useAuth } from '../../hooks/useAuth';
 import { useToast } from '../../hooks/useToast';
 import { shiftScheduleService, ShiftSchedule, WeeklySchedule } from '../../services/api/shiftScheduleService';
 import { attendanceService, Attendance } from '../../services/api/attendanceService';
-import { ToastContainer } from '../../components/common/Toast';
 import { DateTime } from 'luxon';
 
 export default function ManagerShiftSchedulePage() {
@@ -501,8 +500,6 @@ export default function ManagerShiftSchedulePage() {
           )}
         </>
       )}
-
-      <ToastContainer toasts={toast.toasts} onClose={toast.removeToast} />
     </div>
   );
 }

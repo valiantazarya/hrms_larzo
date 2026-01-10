@@ -8,6 +8,9 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
+import { EmailService } from '../email/email.service';
+import { logAuditEvent } from '../common/utils/audit-helper';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -19,6 +22,8 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private auditService: AuditService,
+    private emailService: EmailService,
   ) {}
 
   async validateUser(email: string, password: string): Promise<any> {
@@ -179,9 +184,19 @@ export class AuthService {
     }
   }
 
-  async changePassword(userId: string, changePasswordDto: ChangePasswordDto) {
+  async changePassword(
+    userId: string,
+    changePasswordDto: ChangePasswordDto,
+    ipAddress?: string,
+    userAgent?: string,
+  ) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      include: {
+        employee: {
+          select: { id: true, employeeCode: true, firstName: true, lastName: true },
+        },
+      },
     });
 
     if (!user) {
@@ -202,6 +217,25 @@ export class AuthService {
     await this.prisma.user.update({
       where: { id: userId },
       data: { passwordHash: newPasswordHash },
+    });
+
+    // Log audit event
+    await logAuditEvent(this.auditService, {
+      action: 'UPDATE',
+      entityType: 'User',
+      entityId: userId,
+      actorId: userId,
+      before: {
+        passwordChanged: false,
+      },
+      after: {
+        passwordChanged: true,
+        email: user.email,
+        role: user.role,
+      },
+      reason: 'Password changed by user',
+      ipAddress,
+      userAgent,
     });
   }
 
@@ -231,18 +265,23 @@ export class AuthService {
       },
     });
 
-    // In production, send email with reset link
-    // For now, we'll return the token in development (should be removed in production)
     const frontendUrl = this.configService.get('FRONTEND_URL') || 'http://localhost:5173';
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
 
-    // TODO: Send email with reset link
-    // await this.emailService.sendPasswordResetEmail(user.email, resetLink);
+    // Send email with reset link
+    try {
+      await this.emailService.sendPasswordResetEmail(user.email, resetLink);
+    } catch (error) {
+      // Log error but don't fail the request (security: don't reveal if email exists)
+      console.error('Failed to send password reset email:', error);
+      // In development, log the reset link as fallback
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`Password reset link for ${user.email}: ${resetLink}`);
+      }
+    }
 
-    // In development, log the reset link (remove in production)
+    // In development, also return the token for testing (remove in production)
     if (process.env.NODE_ENV !== 'production') {
-      console.log(`Password reset link for ${user.email}: ${resetLink}`);
-      // In development, also return the token for testing
       return { 
         message: 'If the email exists, a password reset link has been sent.',
         resetToken: resetToken, // Only in development

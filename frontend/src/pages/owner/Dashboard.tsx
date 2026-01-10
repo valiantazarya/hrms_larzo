@@ -18,6 +18,7 @@ import PayrollPage from './PayrollPage';
 import ReportingPage from './ReportingPage';
 import AuditLogPage from './AuditLogPage';
 import ShiftSchedulePage from './ShiftSchedulePage';
+import ProfilePage from './ProfilePage';
 
 function CompanySettings() {
   const { t } = useTranslation();
@@ -2860,13 +2861,13 @@ export default function OwnerDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   
   // Get initial view from URL or default to 'company'
-  const getInitialView = (): 'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' => {
+  const getInitialView = (): 'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' | 'profile' => {
     const tab = searchParams.get('tab');
-    const validViews = ['company', 'policy', 'employees', 'payroll', 'shiftSchedule', 'reports', 'audit', 'approvals', 'approvalHistory', 'leaveQuota'];
+    const validViews = ['company', 'policy', 'employees', 'payroll', 'shiftSchedule', 'reports', 'audit', 'approvals', 'approvalHistory', 'leaveQuota', 'profile'];
     return (tab && validViews.includes(tab)) ? tab as any : 'company';
   };
   
-  const [activeView, setActiveView] = useState<'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota'>(getInitialView());
+  const [activeView, setActiveView] = useState<'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' | 'profile'>(getInitialView());
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const isInitialMount = useRef(true);
@@ -2921,7 +2922,7 @@ export default function OwnerDashboard() {
   });
 
   // Update URL when activeView changes
-  const handleViewChange = (view: 'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota') => {
+  const handleViewChange = (view: 'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' | 'profile') => {
     setActiveView(view);
     setSearchParams({ tab: view }, { replace: true });
   };
@@ -2929,7 +2930,7 @@ export default function OwnerDashboard() {
   // Sync with URL on mount and when URL changes (e.g., browser back/forward)
   useEffect(() => {
     const tab = searchParams.get('tab');
-    const validViews = ['company', 'policy', 'employees', 'payroll', 'shiftSchedule', 'reports', 'audit', 'approvals', 'approvalHistory', 'leaveQuota'];
+    const validViews = ['company', 'policy', 'employees', 'payroll', 'shiftSchedule', 'reports', 'audit', 'approvals', 'approvalHistory', 'leaveQuota', 'profile'];
     
     if (isInitialMount.current) {
       // On initial mount, ensure URL has a tab parameter
@@ -2955,6 +2956,7 @@ export default function OwnerDashboard() {
 
   // Secondary navigation items (grouped in "More" menu)
   const secondaryNavItems = [
+    { key: 'profile', label: t('profile.profile') },
     { key: 'policy', label: t('owner.policyManagement') },
     { key: 'shiftSchedule', label: t('shiftSchedule.title') },
     { key: 'reports', label: t('owner.reports') },
@@ -3121,6 +3123,7 @@ export default function OwnerDashboard() {
         {activeView === 'approvals' && <OwnerApprovalInbox />}
         {activeView === 'approvalHistory' && <OwnerApprovalHistory />}
         {activeView === 'leaveQuota' && <LeaveTypeManagement />}
+        {activeView === 'profile' && <ProfilePage />}
       </main>
 
       {/* Toast Container */}

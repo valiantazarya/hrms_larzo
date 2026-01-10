@@ -7,6 +7,8 @@ import { useToast } from '../../hooks/useToast';
 import { employeeService, Employee } from '../../services/api/employeeService';
 import { Button } from '../../components/common/Button';
 import { ToastContainer } from '../../components/common/Toast';
+import { ChangePassword } from '../../components/common/ChangePassword';
+import { Role } from '../../types';
 
 export default function ProfilePage() {
   const { t } = useTranslation();
@@ -126,6 +128,9 @@ export default function ProfilePage() {
       ) : (
         <div className="text-center py-8 text-gray-500">{t('common.loading')}</div>
       )}
+
+      {/* Change Password - Show for all roles except OWNER */}
+      {user?.role !== Role.OWNER && <ChangePassword />}
 
       {/* Payslips Link */}
       <div className="mt-6">

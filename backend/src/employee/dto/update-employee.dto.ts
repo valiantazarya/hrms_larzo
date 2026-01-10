@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsUUID,
   IsDateString,
+  IsEmail,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { EmployeeStatus, Role } from '../../types/enums';
@@ -28,6 +29,10 @@ export class UpdateEmployeeDto {
   @IsOptional()
   @IsString()
   address?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
 
   @IsOptional()
   @IsEnum(EmployeeStatus)

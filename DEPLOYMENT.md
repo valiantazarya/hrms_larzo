@@ -120,7 +120,7 @@ server {
 }
 ```
 
-6. **Setup PM2 (Process Manager):**
+7. **Setup PM2 (Process Manager):**
 ```bash
 npm install -g pm2
 cd backend
@@ -129,7 +129,7 @@ pm2 startup
 pm2 save
 ```
 
-7. **Setup SSL (Free with Let's Encrypt):**
+8. **Setup SSL (Free with Let's Encrypt):**
 ```bash
 sudo apt install certbot python3-certbot-nginx
 
@@ -291,6 +291,16 @@ MINIO_ENDPOINT=...
 MINIO_ACCESS_KEY=...
 MINIO_SECRET_KEY=...
 CORS_ORIGIN=https://your-domain.com
+FRONTEND_URL=https://your-domain.com
+
+# Email Configuration (for password reset)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-email@gmail.com
+SMTP_PASSWORD=your-app-password
+SMTP_FROM=noreply@your-domain.com
+APP_NAME=HRMS
 ```
 
 **Frontend (.env.production):**

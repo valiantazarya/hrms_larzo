@@ -59,7 +59,14 @@
     "resetTokenMissing": "Reset token is missing or invalid.",
     "requestNewResetLink": "Request a new reset link",
     "backToLogin": "Back to Login",
-    "redirectingToLogin": "Redirecting to login page..."
+    "redirectingToLogin": "Redirecting to login page...",
+    "changePassword": "Change Password",
+    "currentPassword": "Current Password",
+    "changePasswordSuccess": "Password changed successfully",
+    "changePasswordError": "Failed to change password",
+    "passwordMinLength": "Password must be at least 8 characters",
+    "passwordMismatch": "New password and confirm password do not match",
+    "newPasswordMustBeDifferent": "New password must be different from current password"
   },
   "dashboard": {
     "title": "Dashboard",
@@ -398,6 +405,7 @@
   },
   "profile": {
     "title": "Profile",
+    "profile": "Profile",
     "employeeCode": "Employee Code",
     "name": "Name",
     "email": "Email",
@@ -408,7 +416,8 @@
     "status": "Status",
     "employment": "Employment",
     "employmentType": "Employment Type",
-    "baseSalary": "Base Salary"
+    "baseSalary": "Base Salary",
+    "updated": "Profile updated successfully"
   },
   "audit": {
     "title": "Audit Logs",

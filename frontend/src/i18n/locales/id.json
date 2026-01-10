@@ -62,6 +62,13 @@
     "resetPasswordSuccess": "Kata sandi berhasil diatur ulang. Mengalihkan ke halaman login...",
     "resetPasswordError": "Gagal mengatur ulang kata sandi. Tautan mungkin telah kedaluwarsa.",
     "resetTokenMissing": "Token reset tidak ada atau tidak valid.",
+    "changePassword": "Ubah Kata Sandi",
+    "currentPassword": "Kata Sandi Saat Ini",
+    "changePasswordSuccess": "Kata sandi berhasil diubah",
+    "changePasswordError": "Gagal mengubah kata sandi",
+    "passwordMinLength": "Kata sandi harus minimal 8 karakter",
+    "passwordMismatch": "Kata sandi baru dan konfirmasi kata sandi tidak cocok",
+    "newPasswordMustBeDifferent": "Kata sandi baru harus berbeda dari kata sandi saat ini",
     "requestNewResetLink": "Minta tautan reset baru",
     "backToLogin": "Kembali ke Login",
     "redirectingToLogin": "Mengalihkan ke halaman login..."
@@ -186,6 +193,7 @@
   },
   "profile": {
     "title": "Profil",
+    "profile": "Profil",
     "employeeCode": "Kode Karyawan",
     "name": "Nama",
     "email": "Email",
@@ -196,7 +204,8 @@
     "status": "Status",
     "employment": "Informasi Karyawan",
     "employmentType": "Jenis Pekerjaan",
-    "baseSalary": "Gaji Pokok"
+    "baseSalary": "Gaji Pokok",
+    "updated": "Profil berhasil diperbarui"
   },
   "manager": {
     "manager": "Manajer",

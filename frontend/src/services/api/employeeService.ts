@@ -67,7 +67,7 @@ export const employeeService = {
     return response.data;
   },
 
-  async update(id: string, data: Partial<Employee> & { role?: string }): Promise<Employee> {
+  async update(id: string, data: Partial<Employee> & { role?: string; email?: string }): Promise<Employee> {
     const response = await apiClient.put(`/employees/${id}`, data);
     return response.data;
   },

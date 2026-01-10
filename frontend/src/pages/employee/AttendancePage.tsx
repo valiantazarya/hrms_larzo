@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useOnline } from '../../hooks/useOnline';
 import { useToast } from '../../hooks/useToast';
 import { Button } from '../../components/common/Button';
+import { ToastContainer } from '../../components/common/Toast';
 import { attendanceService, Attendance } from '../../services/api/attendanceService';
 import { DateTime } from 'luxon';
 
@@ -298,6 +299,9 @@ export default function AttendancePage() {
           <p className="text-sm text-yellow-800">{t('attendance.offlineWarning')}</p>
         </div>
       )}
+
+      {/* Toast Container */}
+      <ToastContainer toasts={toast.toasts} onClose={toast.removeToast} />
     </div>
   );
 }

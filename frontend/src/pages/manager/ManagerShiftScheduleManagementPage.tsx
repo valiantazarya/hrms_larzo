@@ -6,7 +6,6 @@ import { useToast } from '../../hooks/useToast';
 import { shiftScheduleService, ShiftSchedule, CreateShiftScheduleDto, UpdateShiftScheduleDto } from '../../services/api/shiftScheduleService';
 import { employeeService, Employee } from '../../services/api/employeeService';
 import { Button } from '../../components/common/Button';
-import { ToastContainer } from '../../components/common/Toast';
 import { DateTime } from 'luxon';
 
 export default function ManagerShiftScheduleManagementPage() {
@@ -864,7 +863,6 @@ export default function ManagerShiftScheduleManagementPage() {
         </div>
       )}
 
-      <ToastContainer toasts={toast.toasts} onClose={toast.removeToast} />
     </div>
   );
 }

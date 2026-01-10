@@ -14,6 +14,8 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { IpAddress } from '../common/decorators/ip-address.decorator';
+import { UserAgent } from '../common/decorators/user-agent.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -47,8 +49,15 @@ export class AuthController {
   async changePassword(
     @CurrentUser() user: any,
     @Body() changePasswordDto: ChangePasswordDto,
+    @IpAddress() ipAddress: string,
+    @UserAgent() userAgent: string,
   ) {
-    return this.authService.changePassword(user.id, changePasswordDto);
+    return this.authService.changePassword(
+      user.id,
+      changePasswordDto,
+      ipAddress,
+      userAgent,
+    );
   }
 
   @Post('forgot-password')

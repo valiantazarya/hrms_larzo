@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../../hooks/useToast';
 import { payrollService } from '../../services/api/payrollService';
-import { ToastContainer } from '../../components/common/Toast';
 import { Pagination } from '../../components/common/Pagination';
 
 export default function ManagerPayslipsPage() {
@@ -97,8 +96,6 @@ export default function ManagerPayslipsPage() {
           </>
         );
       })()}
-
-      <ToastContainer toasts={toast.toasts} onClose={toast.removeToast} />
     </div>
   );
 }

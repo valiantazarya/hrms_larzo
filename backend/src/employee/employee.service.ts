@@ -213,6 +213,7 @@ export class EmployeeService {
       address: employee.address,
       status: employee.status,
       role: employee.user?.role,
+      email: employee.user?.email,
       managerId: employee.managerId,
     };
 
@@ -227,6 +228,12 @@ export class EmployeeService {
       }
     }
 
+    // Allow OWNER to update their own information including email
+    // Owner can update any employee, but email changes are only allowed for own profile
+    if (user.role === Role.OWNER && updateEmployeeDto.email && employee.id !== user.employee?.id) {
+      throw new ForbiddenException('Can only change your own email');
+    }
+
     // Only owner can change role
     if (updateEmployeeDto.role && user.role !== Role.OWNER) {
       throw new ForbiddenException('Only owner can change employee role');
@@ -237,8 +244,22 @@ export class EmployeeService {
       throw new BadRequestException('Cannot change owner role');
     }
 
-    // Extract role from DTO if present
-    const { role, ...employeeData } = updateEmployeeDto;
+    // Extract role and email from DTO if present
+    const { role, email, ...employeeData } = updateEmployeeDto;
+
+    // Validate email if being changed
+    if (email && employee.userId) {
+      const normalizedEmail = email.trim().toLowerCase();
+      
+      // Check if email already exists (excluding current user)
+      const existingUser = await this.prisma.user.findUnique({
+        where: { email: normalizedEmail },
+      });
+
+      if (existingUser && existingUser.id !== employee.userId) {
+        throw new BadRequestException('Email already exists');
+      }
+    }
 
     // If role is being changed to MANAGER, clear managerId (managers can't have managers)
     if (role === Role.MANAGER) {
@@ -260,15 +281,23 @@ export class EmployeeService {
       },
     });
 
-    // Update user role if provided
+    // Update user email and/or role if provided
     let finalEmployee = updatedEmployee;
-    if (role && employee.userId) {
+    if ((email || role) && employee.userId) {
+      const userUpdateData: any = {};
+      if (email) {
+        userUpdateData.email = email.trim().toLowerCase();
+      }
+      if (role) {
+        userUpdateData.role = role;
+      }
+
       await this.prisma.user.update({
         where: { id: employee.userId },
-        data: { role },
+        data: userUpdateData,
       });
       
-      // Reload employee to get updated role
+      // Reload employee to get updated email and role
       finalEmployee = await this.prisma.employee.findUnique({
         where: { id },
         include: {
@@ -295,6 +324,7 @@ export class EmployeeService {
         address: finalEmployee.address,
         status: finalEmployee.status,
         role: finalEmployee.user?.role,
+        email: finalEmployee.user?.email,
         managerId: finalEmployee.managerId,
       },
       ipAddress,

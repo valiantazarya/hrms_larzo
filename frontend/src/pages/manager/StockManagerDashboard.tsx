@@ -14,6 +14,8 @@ import ManagerPayslipsPage from './ManagerPayslipsPage';
 import ManagerShiftSchedulePage from './ManagerShiftSchedulePage';
 import ManagerShiftScheduleManagementPage from './ManagerShiftScheduleManagementPage';
 import ManagerAttendanceAdjustment from './ManagerAttendanceAdjustment';
+import { ChangePassword } from '../../components/common/ChangePassword';
+import { employeeService, Employee } from '../../services/api/employeeService';
 
 function ManagerAttendance({ onNavigateToAdjustment }: { onNavigateToAdjustment: () => void }) {
   const { t } = useTranslation();
@@ -268,6 +270,119 @@ function ManagerAttendance({ onNavigateToAdjustment }: { onNavigateToAdjustment:
   );
 }
 
+function StockManagerProfile() {
+  const { t } = useTranslation();
+  const { user } = useAuth();
+  const toast = useToast();
+
+  const { data: employee, error, isLoading } = useQuery<Employee>({
+    queryKey: ['employee', 'me'],
+    queryFn: async () => {
+      if (!user?.employee?.id) throw new Error('Employee not found');
+      return employeeService.getOne(user.employee.id);
+    },
+    enabled: !!user?.employee?.id,
+  });
+
+  useEffect(() => {
+    if (error) {
+      const errorMessage = (error as any).response?.data?.message || (error as any).message || t('common.error');
+      toast.showToast(errorMessage, 'error', 5000);
+    }
+  }, [error, toast, t]);
+
+  if (isLoading) {
+    return (
+      <div className="p-6">
+        <div className="text-center py-8 text-gray-500">{t('common.loading')}</div>
+      </div>
+    );
+  }
+
+  if (!employee) {
+    return (
+      <div className="p-6">
+        <div className="text-center py-8 text-gray-500">{t('common.error')}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6">
+      <h2 className="text-2xl font-bold mb-6">{t('profile.title')}</h2>
+
+      <div className="bg-white rounded-lg shadow-sm border p-6 space-y-4">
+        <div>
+          <label className="text-sm font-medium text-gray-700">{t('profile.employeeCode')}</label>
+          <div className="font-semibold mt-1">{employee.employeeCode}</div>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium text-gray-700">{t('profile.name')}</label>
+          <div className="font-semibold mt-1">
+            {employee.firstName} {employee.lastName}
+          </div>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium text-gray-700">{t('profile.email')}</label>
+          <div className="mt-1">{employee.user?.email || '-'}</div>
+        </div>
+
+        {employee.nik && (
+          <div>
+            <label className="text-sm font-medium text-gray-700">{t('profile.nik')}</label>
+            <div className="mt-1">{employee.nik}</div>
+          </div>
+        )}
+
+        {employee.phone && (
+          <div>
+            <label className="text-sm font-medium text-gray-700">{t('profile.phone')}</label>
+            <div className="mt-1">{employee.phone}</div>
+          </div>
+        )}
+
+        {employee.address && (
+          <div>
+            <label className="text-sm font-medium text-gray-700">{t('profile.address')}</label>
+            <div className="mt-1">{employee.address}</div>
+          </div>
+        )}
+
+        <div>
+          <label className="text-sm font-medium text-gray-700">{t('profile.joinDate')}</label>
+          <div className="mt-1">
+            {new Date(employee.joinDate).toLocaleDateString('id-ID', {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium text-gray-700">{t('profile.status')}</label>
+          <div className="mt-1">
+            <span
+              className={`px-2 py-1 rounded text-xs ${
+                employee.status === 'ACTIVE'
+                  ? 'bg-green-100 text-green-800'
+                  : 'bg-gray-100 text-gray-800'
+              }`}
+            >
+              {employee.status}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Change Password */}
+      <ChangePassword />
+    </div>
+  );
+}
+
 export default function StockManagerDashboard() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
@@ -275,19 +390,19 @@ export default function StockManagerDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   
   // Get initial view from URL or default to 'attendance'
-  const getInitialView = (): 'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'payslips' => {
+  const getInitialView = (): 'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'payslips' | 'profile' => {
     const tab = searchParams.get('tab');
-    const validViews = ['attendance', 'schedule', 'scheduleManagement', 'adjustment', 'payslips'];
+    const validViews = ['attendance', 'schedule', 'scheduleManagement', 'adjustment', 'payslips', 'profile'];
     return (tab && validViews.includes(tab)) ? tab as any : 'attendance';
   };
   
-  const [activeView, setActiveView] = useState<'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'payslips'>(getInitialView());
+  const [activeView, setActiveView] = useState<'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'payslips' | 'profile'>(getInitialView());
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const isInitialMount = useRef(true);
 
   // Update URL when activeView changes
-  const handleViewChange = (view: 'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'payslips') => {
+  const handleViewChange = (view: 'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'payslips' | 'profile') => {
     setActiveView(view);
     setSearchParams({ tab: view }, { replace: true });
   };
@@ -295,7 +410,7 @@ export default function StockManagerDashboard() {
   // Sync with URL on mount and when URL changes (e.g., browser back/forward)
   useEffect(() => {
     const tab = searchParams.get('tab');
-    const validViews = ['attendance', 'schedule', 'scheduleManagement', 'adjustment', 'payslips'];
+    const validViews = ['attendance', 'schedule', 'scheduleManagement', 'adjustment', 'payslips', 'profile'];
     
     if (isInitialMount.current) {
       // On initial mount, ensure URL has a tab parameter
@@ -320,6 +435,7 @@ export default function StockManagerDashboard() {
 
   // Secondary navigation items (grouped in "More" menu)
   const secondaryNavItems = [
+    { key: 'profile', label: t('profile.profile') },
     { key: 'scheduleManagement', label: t('shiftSchedule.title') },
     { key: 'adjustment', label: t('attendance.adjustmentRequests') },
     { key: 'payslips', label: t('payslip.myPayslips') },
@@ -467,6 +583,7 @@ export default function StockManagerDashboard() {
         {activeView === 'scheduleManagement' && <ManagerShiftScheduleManagementPage />}
         {activeView === 'adjustment' && <ManagerAttendanceAdjustment />}
         {activeView === 'payslips' && <ManagerPayslipsPage />}
+        {activeView === 'profile' && <StockManagerProfile />}
       </main>
 
       {/* Toast Container */}
