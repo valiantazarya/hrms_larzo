@@ -1,6 +1,24 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api/v1';
+// Get API URL from environment or auto-detect based on current protocol
+function getApiUrl(): string {
+  const envUrl = import.meta.env.VITE_API_URL;
+  
+  // If explicitly set, use it
+  if (envUrl) {
+    return envUrl;
+  }
+  
+  // In production (HTTPS), use HTTPS for API
+  if (window.location.protocol === 'https:') {
+    return `${window.location.protocol}//${window.location.host}/api/v1`;
+  }
+  
+  // Development fallback
+  return 'http://localhost:3000/api/v1';
+}
+
+const API_URL = getApiUrl();
 
 export const apiClient = axios.create({
   baseURL: API_URL,

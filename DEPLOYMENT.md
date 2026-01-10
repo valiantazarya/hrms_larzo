@@ -305,8 +305,13 @@ APP_NAME=HRMS
 
 **Frontend (.env.production):**
 ```env
-VITE_API_URL=https://api.your-domain.com/api/v1
+# Use HTTPS and same domain (or specify full API URL)
+VITE_API_URL=https://azarya.space/api/v1
+# Or if using subdomain:
+# VITE_API_URL=https://api.azarya.space/api/v1
 ```
+
+**Note:** If `VITE_API_URL` is not set, the frontend will automatically use the same protocol and domain as the current page (HTTPS in production).
 
 ### Production Build Commands
 
