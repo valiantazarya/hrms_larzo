@@ -4,17 +4,25 @@ import axios from 'axios';
 function getApiUrl(): string {
   const envUrl = import.meta.env.VITE_API_URL;
   
-  // If explicitly set, use it
+  // If page is loaded over HTTPS, always use HTTPS for API (prevent mixed content)
+  if (window.location.protocol === 'https:') {
+    // If env URL is set but uses HTTP, convert it to HTTPS
+    if (envUrl && envUrl.startsWith('http://')) {
+      return envUrl.replace('http://', 'https://');
+    }
+    // If no env URL or it's already HTTPS, use same domain
+    if (!envUrl || envUrl.startsWith('https://')) {
+      return `${window.location.protocol}//${window.location.host}/api/v1`;
+    }
+    // If env URL is HTTPS, use it
+    return envUrl;
+  }
+  
+  // Development (HTTP) - use env URL or localhost
   if (envUrl) {
     return envUrl;
   }
   
-  // In production (HTTPS), use HTTPS for API
-  if (window.location.protocol === 'https:') {
-    return `${window.location.protocol}//${window.location.host}/api/v1`;
-  }
-  
-  // Development fallback
   return 'http://localhost:3000/api/v1';
 }
 
