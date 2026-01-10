@@ -597,7 +597,7 @@ export default function ManagerShiftScheduleManagementPage() {
                       type="radio"
                       value="specific"
                       checked={scheduleType === 'specific'}
-                      onChange={(e) => {
+                      onChange={() => {
                         setScheduleType('specific');
                         setFormData({ ...formData, date: selectedDate?.toISODate() || undefined, dayOfWeek: undefined });
                       }}
@@ -610,7 +610,7 @@ export default function ManagerShiftScheduleManagementPage() {
                       type="radio"
                       value="recurring"
                       checked={scheduleType === 'recurring'}
-                      onChange={(e) => {
+                      onChange={() => {
                         setScheduleType('recurring');
                         setFormData({ ...formData, dayOfWeek: selectedDate ? (selectedDate.weekday % 7) : 1, date: undefined });
                       }}

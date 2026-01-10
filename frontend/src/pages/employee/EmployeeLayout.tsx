@@ -1,4 +1,4 @@
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
 import { MobileLayout } from '../../components/layout/MobileLayout';
@@ -7,8 +7,7 @@ import { LanguageSwitcher } from '../../components/common/LanguageSwitcher';
 
 export default function EmployeeLayout() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { logout } = useAuth();
 
   const navItems = [
     {

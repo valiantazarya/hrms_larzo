@@ -62,10 +62,10 @@ function AppRoutes() {
     );
   }
 
-  // Role-based routing (handle both string and enum)
+  // Role-based routing
   const userRole = currentUser.role as Role;
   
-  if (userRole === Role.OWNER || userRole === 'OWNER') {
+  if (userRole === Role.OWNER) {
     return (
       <Routes>
         <Route path="/owner/*" element={<OwnerDashboard />} />
@@ -74,7 +74,7 @@ function AppRoutes() {
     );
   }
 
-  if (userRole === Role.MANAGER || userRole === 'MANAGER') {
+  if (userRole === Role.MANAGER) {
     return (
       <Routes>
         <Route path="/manager/payslips/:payrollRunId" element={<ManagerPayslipPage />} />
@@ -84,7 +84,7 @@ function AppRoutes() {
     );
   }
 
-  if (userRole === Role.STOCK_MANAGER || userRole === 'STOCK_MANAGER') {
+  if (userRole === Role.STOCK_MANAGER) {
     return (
       <Routes>
         <Route path="/manager/payslips/:payrollRunId" element={<ManagerPayslipPage />} />

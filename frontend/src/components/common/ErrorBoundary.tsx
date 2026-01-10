@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+import { Component, ErrorInfo, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 interface Props {
@@ -68,7 +68,7 @@ function ErrorFallback({ error }: { error: Error | null }) {
         <p className="text-gray-600 mb-4">
           {t('error.tryAgain')}
         </p>
-        {error && process.env.NODE_ENV === 'development' && (
+        {error && import.meta.env.MODE === 'development' && (
           <details className="mt-4 text-left">
             <summary className="cursor-pointer text-sm text-gray-500">
               {t('error.details')}

@@ -21,8 +21,6 @@ export default function ReportingPage() {
   const [attendancePage, setAttendancePage] = useState(1);
   const [leavePage, setLeavePage] = useState(1);
   const [overtimePage, setOvertimePage] = useState(1);
-  const [payrollEmployeePage, setPayrollEmployeePage] = useState(1);
-  const [payrollRunsPage, setPayrollRunsPage] = useState(1);
   const itemsPerPage = 10;
 
   const { data: attendanceSummary, error: attendanceError } = useQuery<AttendanceSummary>({
