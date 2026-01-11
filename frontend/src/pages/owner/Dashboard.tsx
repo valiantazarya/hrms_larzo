@@ -2839,31 +2839,37 @@ function EmployeeLeaveQuotaManagement() {
     staleTime: 0, // Always fetch fresh to reflect leave type changes
   });
 
-  // Fetch balances for all employees
+  // Fetch balances for all employees using optimized bulk endpoint
   // Refetch when employees, leave types, or leave policy change
   // This ensures changes in leave quota management and policy are reflected
   const [employeeBalances, setEmployeeBalances] = useState<Map<string, Map<string, LeaveBalance>>>(new Map());
+  const [isLoadingBalances, setIsLoadingBalances] = useState(false);
 
   useEffect(() => {
     const fetchBalances = async () => {
-      const balancesMap = new Map<string, Map<string, LeaveBalance>>();
-      
-      for (const emp of employees.filter(e => e.status === 'ACTIVE')) {
-        const empBalances = new Map<string, LeaveBalance>();
-        for (const leaveType of leaveTypes.filter(lt => lt.isActive)) {
-          try {
-            const balance = await leaveService.getBalance(leaveType.id, emp.id);
-            empBalances.set(leaveType.id, balance);
-          } catch (error: any) {
-            // Log error for debugging but don't break the loop
-            console.error(`Failed to fetch balance for employee ${emp.id}, leave type ${leaveType.id}:`, error);
-            // Balance might not exist yet or employee/leave type might be invalid
+      setIsLoadingBalances(true);
+      try {
+        // Use bulk endpoint for much better performance
+        const allBalances = await leaveService.getAllBalances();
+        
+        // Organize balances into map structure
+        const balancesMap = new Map<string, Map<string, LeaveBalance>>();
+        
+        for (const balance of allBalances) {
+          if (!balancesMap.has(balance.employeeId)) {
+            balancesMap.set(balance.employeeId, new Map());
           }
+          balancesMap.get(balance.employeeId)!.set(balance.leaveTypeId, balance);
         }
-        balancesMap.set(emp.id, empBalances);
+        
+        setEmployeeBalances(balancesMap);
+      } catch (error: any) {
+        console.error('Failed to fetch balances:', error);
+        // Fallback to empty map on error
+        setEmployeeBalances(new Map());
+      } finally {
+        setIsLoadingBalances(false);
       }
-      
-      setEmployeeBalances(balancesMap);
     };
 
     if (employees.length > 0 && leaveTypes.length > 0) {
@@ -2878,26 +2884,26 @@ function EmployeeLeaveQuotaManagement() {
       setEditingQuota(null);
       setQuotaValue('');
       queryClient.invalidateQueries({ queryKey: ['leaveBalance'] });
-      // Refetch balances
-      const fetchBalances = async () => {
-        const balancesMap = new Map<string, Map<string, LeaveBalance>>();
-        for (const emp of employees.filter(e => e.status === 'ACTIVE')) {
-          const empBalances = new Map<string, LeaveBalance>();
-          for (const leaveType of leaveTypes.filter(lt => lt.isActive)) {
-            try {
-              const balance = await leaveService.getBalance(leaveType.id, emp.id);
-              empBalances.set(leaveType.id, balance);
-            } catch (error: any) {
-              // Log error for debugging but don't break the loop
-              console.error(`Failed to fetch balance for employee ${emp.id}, leave type ${leaveType.id}:`, error);
-              // Balance might not exist yet or employee/leave type might be invalid
+      // Refetch balances using bulk endpoint
+      const refetchBalances = async () => {
+        setIsLoadingBalances(true);
+        try {
+          const allBalances = await leaveService.getAllBalances();
+          const balancesMap = new Map<string, Map<string, LeaveBalance>>();
+          for (const balance of allBalances) {
+            if (!balancesMap.has(balance.employeeId)) {
+              balancesMap.set(balance.employeeId, new Map());
             }
+            balancesMap.get(balance.employeeId)!.set(balance.leaveTypeId, balance);
           }
-          balancesMap.set(emp.id, empBalances);
+          setEmployeeBalances(balancesMap);
+        } catch (error: any) {
+          console.error('Failed to refetch balances:', error);
+        } finally {
+          setIsLoadingBalances(false);
         }
-        setEmployeeBalances(balancesMap);
       };
-      fetchBalances();
+      refetchBalances();
     },
     onError: (error: any) => {
       toast.showToast(error.response?.data?.message || t('common.error'), 'error');
@@ -2963,6 +2969,12 @@ function EmployeeLeaveQuotaManagement() {
         <h1 className="text-2xl font-bold mb-2">{t('owner.employeeLeaveQuota')}</h1>
         <p className="text-gray-600 text-sm">{t('owner.employeeLeaveQuotaDescription')}</p>
       </div>
+
+      {isLoadingBalances && (
+        <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <p className="text-blue-800 text-sm">Loading leave balances...</p>
+        </div>
+      )}
 
       <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
         <div className="overflow-x-auto">

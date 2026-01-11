@@ -274,6 +274,209 @@ export class LeaveService {
     return balance;
   }
 
+  /**
+   * Get all leave balances for all active employees in a company
+   * Optimized bulk fetch to avoid N+1 queries
+   */
+  async getAllBalancesForCompany(companyId: string) {
+    const now = DateTime.now().setZone('Asia/Jakarta');
+    const currentYear = now.year;
+    const currentMonth = now.month;
+    const previousMonth = now.minus({ months: 1 });
+
+    // Get leave policy once
+    let accrualMethod: string | null = null;
+    let manualQuotaEnabled: boolean = false;
+    try {
+      const leavePolicy = await this.policyService.findByType(companyId, PolicyType.LEAVE_POLICY);
+      accrualMethod = leavePolicy.config?.accrualMethod || null;
+      manualQuotaEnabled = leavePolicy.config?.manualQuotaEnabled || false;
+    } catch (error: any) {
+      // Policy might not exist, use defaults
+      if (error?.status !== 404 && error?.constructor?.name !== 'NotFoundException') {
+        console.error('Error fetching leave policy:', error);
+      }
+    }
+
+    // Get all active employees in one query
+    const employees = await this.prisma.employee.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+      },
+      select: {
+        id: true,
+        companyId: true,
+      },
+    });
+
+    // Get all active leave types in one query
+    const leaveTypes = await this.prisma.leaveType.findMany({
+      where: {
+        companyId,
+        isActive: true,
+      },
+    });
+
+    if (employees.length === 0 || leaveTypes.length === 0) {
+      return [];
+    }
+
+    const employeeIds = employees.map(e => e.id);
+    const leaveTypeIds = leaveTypes.map(lt => lt.id);
+
+    // Get all current period balances in one query
+    const currentBalances = await this.prisma.leaveBalance.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        leaveTypeId: { in: leaveTypeIds },
+        periodYear: currentYear,
+        periodMonth: currentMonth,
+      },
+    });
+
+    // Get all previous month balances in one query
+    const previousBalances = await this.prisma.leaveBalance.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        leaveTypeId: { in: leaveTypeIds },
+        periodYear: previousMonth.year,
+        periodMonth: previousMonth.month,
+      },
+    });
+
+    // Get previous year June balances for carryover (if current month is July)
+    let previousYearBalances: any[] = [];
+    if (currentMonth === 7) {
+      const previousYear = currentYear - 1;
+      previousYearBalances = await this.prisma.leaveBalance.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          leaveTypeId: { in: leaveTypeIds },
+          periodYear: previousYear,
+          periodMonth: 6,
+        },
+      });
+    }
+
+    // Create maps for quick lookup
+    const currentBalanceMap = new Map<string, any>();
+    currentBalances.forEach(b => {
+      currentBalanceMap.set(`${b.employeeId}_${b.leaveTypeId}`, b);
+    });
+
+    const previousBalanceMap = new Map<string, any>();
+    previousBalances.forEach(b => {
+      previousBalanceMap.set(`${b.employeeId}_${b.leaveTypeId}`, b);
+    });
+
+    const previousYearBalanceMap = new Map<string, any>();
+    previousYearBalances.forEach(b => {
+      previousYearBalanceMap.set(`${b.employeeId}_${b.leaveTypeId}`, b);
+    });
+
+    // Process all combinations
+    const results: any[] = [];
+    const isAccrualDisabled = accrualMethod && typeof accrualMethod === 'string' && accrualMethod.toUpperCase() === 'NONE';
+
+    for (const employee of employees) {
+      for (const leaveType of leaveTypes) {
+        const key = `${employee.id}_${leaveType.id}`;
+        let balance = currentBalanceMap.get(key);
+        const previousBalance = previousBalanceMap.get(key);
+        const previousYearBalance = previousYearBalanceMap.get(key);
+
+        // If manual quota enabled and balance exists, use it directly
+        if (manualQuotaEnabled && balance) {
+          results.push(balance);
+          continue;
+        }
+
+        // Calculate balance
+        const usedAmount = balance ? new Decimal(balance.used) : new Decimal(0);
+        let finalBalance: Decimal;
+        let accrualResult: any;
+
+        if (isAccrualDisabled) {
+          // Simple calculation: maxBalance - used
+          if (leaveType.maxBalance) {
+            finalBalance = new Decimal(leaveType.maxBalance).sub(usedAmount);
+          } else {
+            finalBalance = new Decimal(999).sub(usedAmount);
+          }
+          accrualResult = {
+            balance: finalBalance.add(usedAmount),
+            accrued: new Decimal(0),
+            used: usedAmount,
+            carriedOver: new Decimal(0),
+            expired: new Decimal(0),
+            periodYear: currentYear,
+            periodMonth: currentMonth,
+          };
+        } else {
+          // Normal accrual calculation
+          const previousYearBalanceDecimal = previousYearBalance
+            ? new Decimal(previousYearBalance.balance)
+            : undefined;
+
+          try {
+            accrualResult = calculateLeaveAccrual(
+              leaveType,
+              previousBalance,
+              currentYear,
+              currentMonth,
+              previousYearBalanceDecimal,
+            );
+            finalBalance = accrualResult.balance.sub(usedAmount);
+          } catch (error: any) {
+            console.error(`Error calculating accrual for employee ${employee.id}, leave type ${leaveType.id}:`, error);
+            // Skip this combination on error
+            continue;
+          }
+        }
+
+        // Update or create balance
+        if (balance) {
+          balance = await this.prisma.leaveBalance.update({
+            where: {
+              employeeId_leaveTypeId_periodYear_periodMonth: {
+                employeeId: employee.id,
+                leaveTypeId: leaveType.id,
+                periodYear: currentYear,
+                periodMonth: currentMonth,
+              },
+            },
+            data: {
+              balance: finalBalance.toNumber(),
+              accrued: accrualResult.accrued.toNumber(),
+              used: usedAmount.toNumber(),
+              carriedOver: accrualResult.carriedOver.toNumber(),
+              expired: accrualResult.expired.toNumber(),
+            },
+          });
+        } else {
+          balance = await this.prisma.leaveBalance.create({
+            data: {
+              employeeId: employee.id,
+              leaveTypeId: leaveType.id,
+              balance: finalBalance.toNumber(),
+              accrued: accrualResult.accrued.toNumber(),
+              used: usedAmount.toNumber(),
+              carriedOver: accrualResult.carriedOver.toNumber(),
+              expired: accrualResult.expired.toNumber(),
+              periodYear: currentYear,
+              periodMonth: currentMonth,
+            },
+          });
+        }
+
+        results.push(balance);
+      }
+    }
+
+    return results;
+  }
+
   async createLeaveRequest(
     employeeId: string,
     createLeaveRequestDto: CreateLeaveRequestDto,

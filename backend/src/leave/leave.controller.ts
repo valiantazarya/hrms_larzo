@@ -75,6 +75,17 @@ export class LeaveController {
     return this.leaveService.getLeaveBalance(employeeId, leaveTypeId);
   }
 
+  @Get('balances/all')
+  @Roles(Role.OWNER)
+  @UseGuards(RolesGuard)
+  async getAllBalances(@CurrentUser() user: any) {
+    const companyId = user.employee?.companyId;
+    if (!companyId) {
+      throw new BadRequestException('Company not found');
+    }
+    return this.leaveService.getAllBalancesForCompany(companyId);
+  }
+
   @Get('requests')
   async getLeaveRequests(
     @CurrentUser() user: any,

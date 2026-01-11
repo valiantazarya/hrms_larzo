@@ -91,6 +91,11 @@ export const leaveService = {
     return response.data;
   },
 
+  async getAllBalances(): Promise<LeaveBalance[]> {
+    const response = await apiClient.get('/leave/balances/all');
+    return response.data;
+  },
+
   async getRequests(employeeId?: string): Promise<LeaveRequest[]> {
     const response = await apiClient.get('/leave/requests', {
       params: employeeId ? { employeeId } : {},
