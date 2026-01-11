@@ -4,6 +4,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useToast } from '../../hooks/useToast';
 import { authService } from '../../services/auth/authService';
 import { Button } from './Button';
+import { Modal } from './Modal';
 
 interface ChangePasswordProps {
   onSuccess?: () => void;
@@ -79,8 +80,8 @@ export function ChangePassword({ onSuccess }: ChangePasswordProps) {
     setShowForm(false);
   };
 
-  if (!showForm) {
-    return (
+  return (
+    <>
       <div className="mt-6">
         <Button
           onClick={() => setShowForm(true)}
@@ -90,13 +91,14 @@ export function ChangePassword({ onSuccess }: ChangePasswordProps) {
           {t('auth.changePassword')}
         </Button>
       </div>
-    );
-  }
 
-  return (
-    <div className="mt-6 bg-white rounded-lg shadow-sm border p-4">
-      <h3 className="text-lg font-semibold mb-4">{t('auth.changePassword')}</h3>
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <Modal
+        isOpen={showForm}
+        onClose={handleCancel}
+        title={t('auth.changePassword')}
+        size="md"
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             {t('auth.currentPassword')} <span className="text-red-500">*</span>
@@ -142,26 +144,27 @@ export function ChangePassword({ onSuccess }: ChangePasswordProps) {
           />
         </div>
 
-        <div className="flex gap-3 pt-2">
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={changePasswordMutation.isPending}
-            fullWidth
-          >
-            {changePasswordMutation.isPending ? t('common.saving') : t('common.save')}
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={handleCancel}
-            disabled={changePasswordMutation.isPending}
-            fullWidth
-          >
-            {t('common.cancel')}
-          </Button>
-        </div>
-      </form>
-    </div>
+          <div className="flex gap-3 pt-2">
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={changePasswordMutation.isPending}
+              fullWidth
+            >
+              {changePasswordMutation.isPending ? t('common.saving') : t('common.save')}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleCancel}
+              disabled={changePasswordMutation.isPending}
+              fullWidth
+            >
+              {t('common.cancel')}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </>
   );
 }

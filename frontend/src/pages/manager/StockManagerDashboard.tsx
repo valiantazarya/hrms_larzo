@@ -12,7 +12,7 @@ import { LanguageSwitcher } from '../../components/common/LanguageSwitcher';
 import { DateTime } from 'luxon';
 import ManagerPayslipsPage from './ManagerPayslipsPage';
 import ManagerShiftSchedulePage from './ManagerShiftSchedulePage';
-import ManagerShiftScheduleManagementPage from './ManagerShiftScheduleManagementPage';
+import ShiftSchedulePage from '../owner/ShiftSchedulePage';
 import ManagerAttendanceAdjustment from './ManagerAttendanceAdjustment';
 import { ChangePassword } from '../../components/common/ChangePassword';
 import { employeeService, Employee } from '../../services/api/employeeService';
@@ -580,7 +580,7 @@ export default function StockManagerDashboard() {
       <main className="max-w-7xl mx-auto py-6">
         {activeView === 'attendance' && <ManagerAttendance onNavigateToAdjustment={() => handleViewChange('adjustment')} />}
         {activeView === 'schedule' && <ManagerShiftSchedulePage />}
-        {activeView === 'scheduleManagement' && <ManagerShiftScheduleManagementPage />}
+        {activeView === 'scheduleManagement' && <ShiftSchedulePage />}
         {activeView === 'adjustment' && <ManagerAttendanceAdjustment />}
         {activeView === 'payslips' && <ManagerPayslipsPage />}
         {activeView === 'profile' && <StockManagerProfile />}

@@ -36,6 +36,7 @@ export default function ManagerAttendanceAdjustment() {
   // Filter employees based on role:
   // - EMPLOYEE, STOCK_MANAGER and SUPERVISOR: Only themselves
   // - MANAGER: Themselves and direct reports
+  // Sort by name (firstName + lastName)
   const employees = useMemo(() => {
     if (!userEmployee || userEmployee.status !== 'ACTIVE') {
       return [];
@@ -53,10 +54,14 @@ export default function ManagerAttendanceAdjustment() {
       );
       // Check if manager is already in the list
       const managerExists = directReports.some(emp => emp.id === userEmployee.id);
-      if (!managerExists) {
-        return [userEmployee, ...directReports];
-      }
-      return directReports;
+      const employeeList = !managerExists ? [userEmployee, ...directReports] : directReports;
+      
+      // Sort by name
+      return employeeList.sort((a, b) => {
+        const nameA = `${a.firstName} ${a.lastName}`.toLowerCase();
+        const nameB = `${b.firstName} ${b.lastName}`.toLowerCase();
+        return nameA.localeCompare(nameB);
+      });
     }
 
     // Default: only themselves
@@ -370,18 +375,21 @@ export default function ManagerAttendanceAdjustment() {
           <div className="p-4 border-b">
             <div className="flex justify-between items-center">
               <h2 className="text-lg font-semibold">{t('attendance.adjustmentRequests')}</h2>
-              <Button
-                onClick={() => {
-                  setShowRequestForm(true);
-                  setSelectedAttendanceId('');
-                  setClockIn('');
-                  setClockOut('');
-                  setReason('');
-                }}
-                disabled={!selectedEmployeeId}
-              >
-                {t('attendance.requestAdjustment')}
-              </Button>
+              {/* Hide button when form is shown (especially for STOCK_MANAGER role) */}
+              {!showRequestForm && (
+                <Button
+                  onClick={() => {
+                    setShowRequestForm(true);
+                    setSelectedAttendanceId('');
+                    setClockIn('');
+                    setClockOut('');
+                    setReason('');
+                  }}
+                  disabled={!selectedEmployeeId}
+                >
+                  {t('attendance.requestAdjustment')}
+                </Button>
+              )}
             </div>
           </div>
 

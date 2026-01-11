@@ -1,15 +1,28 @@
 import { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '../../hooks/useAuth';
 import { useToast } from '../../hooks/useToast';
 import { shiftScheduleService, ShiftSchedule, CreateShiftScheduleDto, UpdateShiftScheduleDto } from '../../services/api/shiftScheduleService';
 import { employeeService, Employee } from '../../services/api/employeeService';
+import { leaveService, LeaveRequest } from '../../services/api/leaveService';
 import { Button } from '../../components/common/Button';
 import { ToastContainer } from '../../components/common/Toast';
+import { Modal } from '../../components/common/Modal';
 import { DateTime } from 'luxon';
 
 export default function ShiftSchedulePage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  
+  // Helper function to get translated leave type name
+  const getLeaveTypeName = (leaveType?: { name?: string; nameId?: string }): string => {
+    if (!leaveType) return t('leave.onLeave');
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && leaveType.nameId) {
+      return leaveType.nameId;
+    }
+    return leaveType.name || t('leave.onLeave');
+  };
   
   // Days of week with translations
   const DAYS_OF_WEEK = useMemo(() => [
@@ -23,6 +36,7 @@ export default function ShiftSchedulePage() {
   ], [t]);
   const toast = useToast();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   // Load saved view mode preference from localStorage
   const [viewMode, setViewModeState] = useState<'calendar' | 'list'>(() => {
     const saved = localStorage.getItem('ownerScheduleViewMode');
@@ -37,12 +51,21 @@ export default function ShiftSchedulePage() {
   const [currentMonth, setCurrentMonth] = useState(() => {
     return DateTime.now().setZone('Asia/Jakarta').startOf('month');
   });
+  // Default export week to current week (format: YYYY-Www)
+  const [exportWeekStart, setExportWeekStart] = useState<string>(() => {
+    const now = DateTime.now().setZone('Asia/Jakarta');
+    const weekStart = now.startOf('week');
+    // Format as YYYY-Www (ISO week format)
+    return `${weekStart.year}-W${String(weekStart.weekNumber).padStart(2, '0')}`;
+  });
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<DateTime | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<ShiftSchedule | null>(null);
   const [deletingSchedule, setDeletingSchedule] = useState<ShiftSchedule | null>(null);
   const [scheduleType, setScheduleType] = useState<'recurring' | 'specific'>('specific');
+  const [selectedDayForModal, setSelectedDayForModal] = useState<{ date: DateTime; schedules: ShiftSchedule[] } | null>(null);
   
   // Get last entered times from localStorage, or use defaults (08:00 - 16:00)
   const getLastTimes = () => {
@@ -61,11 +84,39 @@ export default function ShiftSchedulePage() {
     notes: '',
   });
 
-  // Fetch employees
-  const { data: employees = [] } = useQuery<Employee[]>({
+  // Fetch all employees
+  const { data: allEmployees = [] } = useQuery<Employee[]>({
     queryKey: ['employees'],
     queryFn: () => employeeService.getAll(),
   });
+
+  // Filter employees based on role:
+  // - OWNER: All employees
+  // - STOCK_MANAGER: All employees except managers and owners
+  const employees = useMemo(() => {
+    if (user?.role === 'STOCK_MANAGER') {
+      return allEmployees
+        .filter(emp => 
+          emp.status === 'ACTIVE' && 
+          emp.user?.role !== 'OWNER' &&
+          emp.user?.role !== 'MANAGER'
+        )
+        .sort((a, b) => {
+          const nameA = `${a.firstName} ${a.lastName}`.toLowerCase();
+          const nameB = `${b.firstName} ${b.lastName}`.toLowerCase();
+          return nameA.localeCompare(nameB);
+        });
+    }
+    
+    // Owner sees all employees
+    return allEmployees
+      .filter(emp => emp.status === 'ACTIVE')
+      .sort((a, b) => {
+        const nameA = `${a.firstName} ${a.lastName}`.toLowerCase();
+        const nameB = `${b.firstName} ${b.lastName}`.toLowerCase();
+        return nameA.localeCompare(nameB);
+      });
+  }, [allEmployees, user?.role]);
 
   // Calculate date range for current month
   const monthStart = currentMonth.startOf('month');
@@ -83,10 +134,77 @@ export default function ShiftSchedulePage() {
   // Extract schedules array from response
   const schedules: ShiftSchedule[] = Array.isArray(schedulesData) ? schedulesData : [];
 
-  // Filter schedules by selected employee
-  const filteredSchedules = selectedEmployeeId
-    ? schedules.filter(s => s.employeeId === selectedEmployeeId)
-    : schedules;
+  // Fetch approved leave requests for all employees in the date range
+  const { data: allLeaveRequests = [] } = useQuery<LeaveRequest[]>({
+    queryKey: ['leaveRequests', 'all', startDate, endDate],
+    queryFn: async () => {
+      if (employees.length === 0) return [];
+      const allLeaves: LeaveRequest[] = [];
+      for (const emp of employees) {
+        try {
+          const requests = await leaveService.getRequests(emp.id);
+          // Filter approved leaves that overlap with the date range
+          const approvedLeaves = requests.filter(req => {
+            if (req.status !== 'APPROVED') return false;
+            const leaveStart = DateTime.fromISO(req.startDate).setZone('Asia/Jakarta');
+            const leaveEnd = DateTime.fromISO(req.endDate).setZone('Asia/Jakarta');
+            const rangeStart = DateTime.fromISO(startDate).setZone('Asia/Jakarta');
+            const rangeEnd = DateTime.fromISO(endDate).setZone('Asia/Jakarta');
+            // Check if leave overlaps with date range
+            return leaveStart <= rangeEnd && leaveEnd >= rangeStart;
+          });
+          allLeaves.push(...approvedLeaves);
+        } catch (error) {
+          // Skip if no access or error
+        }
+      }
+      return allLeaves;
+    },
+    enabled: employees.length > 0 && !!startDate && !!endDate,
+  });
+
+  // Create a map of approved leaves by employeeId and date
+  const approvedLeavesByEmployeeAndDate = useMemo(() => {
+    const map = new Map<string, Map<string, LeaveRequest>>(); // employeeId -> date -> LeaveRequest
+    allLeaveRequests.forEach(leave => {
+      if (leave.status !== 'APPROVED') return;
+      const start = DateTime.fromISO(leave.startDate).setZone('Asia/Jakarta').startOf('day');
+      const end = DateTime.fromISO(leave.endDate).setZone('Asia/Jakarta').startOf('day');
+      let current = start;
+      while (current <= end) {
+        const dateStr = current.toISODate() || '';
+        if (!map.has(leave.employeeId)) {
+          map.set(leave.employeeId, new Map());
+        }
+        const employeeLeaves = map.get(leave.employeeId)!;
+        // Only set if not already set (prefer first leave if multiple on same day)
+        if (!employeeLeaves.has(dateStr)) {
+          employeeLeaves.set(dateStr, leave);
+        }
+        current = current.plus({ days: 1 });
+      }
+    });
+    return map;
+  }, [allLeaveRequests]);
+
+  // Filter schedules by selected employee and role restrictions
+  const filteredSchedules = useMemo(() => {
+    let filtered = schedules;
+    
+    // For stock managers, only show schedules for employees (not managers or owners)
+    if (user?.role === 'STOCK_MANAGER') {
+      filtered = schedules.filter(s => 
+        employees.some(emp => emp.id === s.employeeId)
+      );
+    }
+    
+    // Filter by selected employee if one is selected
+    if (selectedEmployeeId) {
+      filtered = filtered.filter(s => s.employeeId === selectedEmployeeId);
+    }
+    
+    return filtered;
+  }, [schedules, employees, selectedEmployeeId, user?.role]);
 
   // Generate calendar days for current month
   const calendarDays = useMemo(() => {
@@ -105,7 +223,7 @@ export default function ShiftSchedulePage() {
       ? lastDayOfMonth
       : lastDayOfMonth.plus({ days: 7 - lastDayOfMonth.weekday });
     
-    const days: Array<{ date: DateTime; isCurrentMonth: boolean; schedules: ShiftSchedule[] }> = [];
+    const days: Array<{ date: DateTime; isCurrentMonth: boolean; schedules: ShiftSchedule[]; leaves: Map<string, LeaveRequest> }> = [];
     
     let current = start;
     while (current <= end) {
@@ -118,6 +236,12 @@ export default function ShiftSchedulePage() {
       // 2. Recurring schedules (dayOfWeek matches and date is null)
       const daySchedules = filteredSchedules.filter(s => {
         if (!s.isActive) return false;
+        
+        // Check if employee has approved leave on this date - if yes, don't show schedule
+        const employeeLeaves = approvedLeavesByEmployeeAndDate.get(s.employeeId);
+        if (employeeLeaves?.has(dateStr)) {
+          return false; // Hide schedule if leave exists
+        }
         
         // Date-specific schedule
         if (s.date) {
@@ -136,15 +260,25 @@ export default function ShiftSchedulePage() {
         return a.startTime.localeCompare(b.startTime);
       });
       
+      // Get leaves for this date (all employees)
+      const dayLeaves = new Map<string, LeaveRequest>();
+      approvedLeavesByEmployeeAndDate.forEach((employeeLeaves, employeeId) => {
+        const leave = employeeLeaves.get(dateStr);
+        if (leave) {
+          dayLeaves.set(employeeId, leave);
+        }
+      });
+      
       days.push({
         date: current,
         isCurrentMonth: current.month === currentMonth.month,
         schedules: daySchedules,
+        leaves: dayLeaves,
       });
       current = current.plus({ days: 1 });
     }
     return days;
-  }, [currentMonth, filteredSchedules]);
+  }, [currentMonth, filteredSchedules, approvedLeavesByEmployeeAndDate]);
 
   const handlePreviousMonth = () => {
     setCurrentMonth(currentMonth.minus({ months: 1 }));
@@ -196,7 +330,9 @@ export default function ShiftSchedulePage() {
       shiftScheduleService.update(id, data),
     onSuccess: async () => {
       toast.showToast(t('shiftSchedule.updated'), 'success');
+      setShowCreateForm(false);
       setEditingSchedule(null);
+      setSelectedDate(null);
       resetForm();
       // Invalidate and refetch all shift schedule queries
       await queryClient.invalidateQueries({ queryKey: ['shiftSchedules'] });
@@ -361,6 +497,287 @@ export default function ShiftSchedulePage() {
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">{t('shiftSchedule.title')}</h2>
         <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            {/* Week Selector for Export */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">
+                {t('shiftSchedule.exportWeek')}:
+              </label>
+              <input
+                type="week"
+                value={exportWeekStart || ''}
+                onChange={(e) => setExportWeekStart(e.target.value)}
+                className="px-3 py-2 text-sm border rounded-md"
+                title={t('shiftSchedule.selectWeekToExport')}
+              />
+            </div>
+            <button
+              onClick={async () => {
+                if (!exportWeekStart) {
+                  toast.showToast(t('shiftSchedule.selectWeekFirst'), 'error');
+                  return;
+                }
+
+                setIsExportingExcel(true);
+
+                try {
+                  // Dynamic import to avoid bundle size issues if packages aren't installed
+                  // @ts-ignore - xlsx may not be installed
+                  const XLSX = await import('xlsx');
+                  
+                  if (!XLSX || !XLSX.utils) {
+                    throw new Error('xlsx library is not properly loaded. Please install xlsx: npm install xlsx');
+                  }
+                  
+                  // Parse selected week (format: YYYY-Www from HTML week input)
+                  // HTML week input returns format like "2024-W01" where 01 is the week number
+                  const [year, weekNum] = exportWeekStart.split('-W').map(Number);
+                  // Create date from week year and week number
+                  const weekStart = DateTime.fromObject({ 
+                    weekYear: year, 
+                    weekNumber: weekNum 
+                  }, { zone: 'Asia/Jakarta' }).startOf('week');
+                  const weekEnd = weekStart.endOf('week');
+                  const weekStartDate = weekStart.toISODate() || '';
+                  const weekEndDate = weekEnd.toISODate() || '';
+                  
+                  // Fetch schedules for the selected week
+                  const weekSchedulesData = await shiftScheduleService.getAll(
+                    selectedEmployeeId || undefined,
+                    undefined,
+                    weekStartDate,
+                    weekEndDate
+                  );
+                  
+                  const weekSchedules: ShiftSchedule[] = Array.isArray(weekSchedulesData) 
+                    ? weekSchedulesData 
+                    : [];
+                  
+                  // Fetch approved leaves for all employees in the week
+                  const allWeekLeaves: LeaveRequest[] = [];
+                  for (const emp of employees) {
+                    try {
+                      const requests = await leaveService.getRequests(emp.id);
+                      const approvedLeaves = requests.filter(req => {
+                        if (req.status !== 'APPROVED') return false;
+                        const leaveStart = DateTime.fromISO(req.startDate).setZone('Asia/Jakarta');
+                        const leaveEnd = DateTime.fromISO(req.endDate).setZone('Asia/Jakarta');
+                        return leaveStart <= weekEnd && leaveEnd >= weekStart;
+                      });
+                      allWeekLeaves.push(...approvedLeaves);
+                    } catch (error) {
+                      // Skip if no access
+                    }
+                  }
+                  
+                  // Create leaves map: employeeId -> date -> LeaveRequest
+                  const leavesMap = new Map<string, Map<string, LeaveRequest>>();
+                  allWeekLeaves.forEach(leave => {
+                    const start = DateTime.fromISO(leave.startDate).setZone('Asia/Jakarta').startOf('day');
+                    const end = DateTime.fromISO(leave.endDate).setZone('Asia/Jakarta').startOf('day');
+                    let current = start;
+                    while (current <= end && current <= weekEnd) {
+                      if (current >= weekStart) {
+                        const dateStr = current.toISODate() || '';
+                        if (!leavesMap.has(leave.employeeId)) {
+                          leavesMap.set(leave.employeeId, new Map());
+                        }
+                        const employeeLeaves = leavesMap.get(leave.employeeId)!;
+                        if (!employeeLeaves.has(dateStr)) {
+                          employeeLeaves.set(dateStr, leave);
+                        }
+                      }
+                      current = current.plus({ days: 1 });
+                    }
+                  });
+                  
+                  // Filter by role if needed
+                  let allSchedulesForExport = weekSchedules;
+                  if (user?.role === 'STOCK_MANAGER') {
+                    allSchedulesForExport = weekSchedules.filter(s => 
+                      employees.some(emp => emp.id === s.employeeId)
+                    );
+                  }
+                  
+                  // Get employees to export (filtered by role)
+                  let employeesToExport = employees;
+                  if (user?.role === 'STOCK_MANAGER') {
+                    employeesToExport = employees.filter(emp => 
+                      emp.status === 'ACTIVE' && 
+                      emp.user?.role !== 'OWNER' &&
+                      emp.user?.role !== 'MANAGER'
+                    );
+                  } else {
+                    employeesToExport = employees.filter(emp => emp.status === 'ACTIVE');
+                  }
+                  
+                  // Sort employees by name
+                  employeesToExport.sort((a, b) => {
+                    const nameA = `${a.firstName} ${a.lastName}`.toLowerCase();
+                    const nameB = `${b.firstName} ${b.lastName}`.toLowerCase();
+                    return nameA.localeCompare(nameB);
+                  });
+                  
+                  // Generate all days in the week (Mon-Sun)
+                  const weekDays = Array.from({ length: 7 }, (_, i) => {
+                    const day = weekStart.plus({ days: i });
+                    return {
+                      date: day,
+                      dayOfWeek: day.weekday === 7 ? 0 : day.weekday, // Convert to 0=Sun, 1=Mon, ..., 6=Sat
+                      dateStr: day.toISODate() || '',
+                    };
+                  });
+                  
+                  // Build schedule map: employeeId -> dayOfWeek -> startTimes[]
+                  const scheduleMap = new Map<string, Map<number, string[]>>();
+                  
+                  // Initialize map for all employees
+                  employeesToExport.forEach(emp => {
+                    scheduleMap.set(emp.id, new Map());
+                    // Initialize all days
+                    for (let i = 0; i < 7; i++) {
+                      scheduleMap.get(emp.id)!.set(i, []);
+                    }
+                  });
+                  
+                  // Process schedules and populate the map (only if no leave)
+                  allSchedulesForExport.forEach(schedule => {
+                    if (!schedule.isActive) return;
+                    
+                    const empSchedules = scheduleMap.get(schedule.employeeId);
+                    if (!empSchedules) return;
+                    
+                    const employeeLeaves = leavesMap.get(schedule.employeeId);
+                    
+                    weekDays.forEach(dayInfo => {
+                      // Skip if employee has leave on this day
+                      if (employeeLeaves?.has(dayInfo.dateStr)) return;
+                      
+                      let shouldInclude = false;
+                      
+                      // Date-specific schedule
+                      if (schedule.date) {
+                        const scheduleDate = DateTime.fromISO(schedule.date).setZone('Asia/Jakarta').toISODate();
+                        shouldInclude = scheduleDate === dayInfo.dateStr;
+                      }
+                      // Recurring schedule
+                      else if (schedule.dayOfWeek !== null && schedule.dayOfWeek !== undefined) {
+                        shouldInclude = schedule.dayOfWeek === dayInfo.dayOfWeek;
+                      }
+                      
+                      if (shouldInclude) {
+                        const existing = empSchedules.get(dayInfo.dayOfWeek) || [];
+                        if (!existing.includes(schedule.startTime)) {
+                          existing.push(schedule.startTime);
+                        }
+                        empSchedules.set(dayInfo.dayOfWeek, existing);
+                      }
+                    });
+                  });
+                  
+                  // Generate Excel data in grid format
+                  const excelData: any[] = [];
+                  
+                  // Header row: No, Name, Division, Mon, Tue, Wed, Thu, Fri, Sat, Sun
+                  const headerRow = [
+                    'No',
+                    t('shiftSchedule.employeeName'),
+                    t('shiftSchedule.division'),
+                    ...weekDays.map(day => DAYS_OF_WEEK.find(d => d.value === day.dayOfWeek)?.short || '')
+                  ];
+                  excelData.push(headerRow);
+                  
+                  // Data rows: one per employee
+                  employeesToExport.forEach((employee, index) => {
+                    const empSchedules = scheduleMap.get(employee.id) || new Map();
+                    const employeeLeaves = leavesMap.get(employee.id);
+                    const row = [
+                      index + 1, // No
+                      `${employee.firstName} ${employee.lastName}`, // Name
+                      employee.division || '', // Division
+                      // Start times for each day (or leave type if on leave)
+                      ...weekDays.map(day => {
+                        // Check if employee has leave on this day
+                        const leave = employeeLeaves?.get(day.dateStr);
+                        if (leave) {
+                          return getLeaveTypeName(leave.leaveType);
+                        }
+                        // Otherwise show schedule start times
+                        const startTimes = empSchedules.get(day.dayOfWeek) || [];
+                        return startTimes.sort().join(', '); // Sort times and join with comma
+                      })
+                    ];
+                    excelData.push(row);
+                  });
+                  
+                  // Create workbook and worksheet
+                  const ws = XLSX.utils.aoa_to_sheet(excelData);
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, ws, 'Shift Schedules');
+                  
+                  // Set column widths
+                  ws['!cols'] = [
+                    { wch: 5 },  // No
+                    { wch: 25 }, // Employee Name
+                    { wch: 20 }, // Division
+                    { wch: 15 }, // Monday
+                    { wch: 15 }, // Tuesday
+                    { wch: 15 }, // Wednesday
+                    { wch: 15 }, // Thursday
+                    { wch: 15 }, // Friday
+                    { wch: 15 }, // Saturday
+                    { wch: 15 }, // Sunday
+                  ];
+                  
+                  // Export to Excel
+                  const fileName = `shift-schedule-${weekStart.toFormat('yyyy-MM-dd')}-to-${weekEnd.toFormat('yyyy-MM-dd')}.xlsx`;
+                  XLSX.writeFile(wb, fileName);
+                  toast.showToast(t('shiftSchedule.exportCalendar') + ' (Excel)', 'success');
+                } catch (error: any) {
+                  if (error.message?.includes('Cannot find module')) {
+                    toast.showToast('Please install xlsx: npm install xlsx', 'error', 8000);
+                  } else {
+                    toast.showToast(error.message || t('common.error'), 'error');
+                  }
+                } finally {
+                  setIsExportingExcel(false);
+                }
+              }}
+              className="px-3 py-2 text-sm font-medium bg-white text-gray-700 hover:bg-gray-50 border rounded-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              title={t('shiftSchedule.exportAsExcel')}
+              disabled={!exportWeekStart || isExportingExcel}
+            >
+              {isExportingExcel ? (
+                <>
+                  <svg
+                    className="animate-spin h-4 w-4"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                  <span>{t('shiftSchedule.exporting')}</span>
+                </>
+              ) : (
+                <>
+                  📊 {t('shiftSchedule.exportExcel')}
+                </>
+              )}
+            </button>
+          </div>
           <div className="flex border rounded-md">
             <button
               onClick={() => setViewMode('calendar')}
@@ -418,19 +835,17 @@ export default function ShiftSchedulePage() {
           className="w-full md:w-64 p-2 border rounded-md"
         >
           <option value="">{t('shiftSchedule.allEmployees')}</option>
-          {employees
-            .filter(emp => emp.status === 'ACTIVE' && emp.user?.role !== 'OWNER')
-            .map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                {emp.firstName} {emp.lastName} ({emp.employeeCode})
-              </option>
-            ))}
+          {employees.map((emp) => (
+            <option key={emp.id} value={emp.id}>
+              {emp.firstName} {emp.lastName} ({emp.employeeCode})
+            </option>
+          ))}
         </select>
       </div>
 
       {/* Calendar View */}
       {viewMode === 'calendar' && (
-        <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
+        <div className="bg-white rounded-lg shadow-sm border p-6 mb-6 calendar-export-container">
           {/* Month Navigation */}
           <div className="flex items-center justify-between mb-6">
             <button
@@ -476,28 +891,74 @@ export default function ShiftSchedulePage() {
             {/* Calendar Days */}
             {calendarDays.map((day, index) => {
               const isToday = day.date.hasSame(DateTime.now().setZone('Asia/Jakarta'), 'day');
+              const hasSchedule = day.schedules.length > 0;
+              const hasLeave = day.leaves.size > 0;
               return (
                 <div
                   key={index}
-                  className={`min-h-24 border rounded-lg p-2 ${
-                    day.isCurrentMonth ? 'bg-white' : 'bg-gray-50'
-                  } ${isToday ? 'ring-2 ring-indigo-500' : ''}`}
+                  className={`min-h-24 border rounded-lg p-2 transition-colors ${
+                    hasLeave
+                      ? day.isCurrentMonth 
+                        ? 'bg-blue-50 border-blue-200' 
+                        : 'bg-blue-100 border-blue-300'
+                      : hasSchedule
+                        ? day.isCurrentMonth 
+                          ? 'bg-indigo-50 border-indigo-200' 
+                          : 'bg-indigo-100 border-indigo-300'
+                        : day.isCurrentMonth 
+                          ? 'bg-white border-gray-200' 
+                          : 'bg-gray-50 border-gray-100'
+                  } ${isToday ? 'ring-2 ring-indigo-500' : ''} ${(hasSchedule || hasLeave) ? 'h-auto' : ''}`}
                 >
                   <div className={`text-sm font-medium mb-1 ${isToday ? 'text-indigo-600' : day.isCurrentMonth ? 'text-gray-900' : 'text-gray-400'}`}>
                     {day.date.day}
                   </div>
-                  <div className="space-y-1">
-                    {day.schedules.slice(0, 3).map((schedule) => {
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {/* Show leaves first (they override schedules) */}
+                    {Array.from(day.leaves.entries()).map(([employeeId, leave]) => {
+                      const employee = employees.find(e => e.id === employeeId);
+                      return (
+                        <div
+                          key={`leave-${leave.id}-${employeeId}`}
+                          className="text-xs p-1 rounded border bg-blue-100 text-blue-800 border-blue-300"
+                          title={`${employee?.firstName} ${employee?.lastName}: ${getLeaveTypeName(leave.leaveType)}`}
+                        >
+                          <div className="font-medium truncate">
+                            {employee ? `${employee.firstName} ${employee.lastName.charAt(0)}.` : 'N/A'}
+                          </div>
+                          <div className="text-xs opacity-75">
+                            {getLeaveTypeName(leave.leaveType)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* Show schedules (only if no leave for that employee) */}
+                    {day.schedules.map((schedule) => {
+                      // Skip if employee has leave on this day
+                      if (day.leaves.has(schedule.employeeId)) return null;
+                      
                       const employee = employees.find(e => e.id === schedule.employeeId);
                       const colorClass = employeeColors.get(schedule.employeeId) || 'bg-gray-100 text-gray-800 border-gray-200';
                       return (
                         <div
                           key={schedule.id}
-                          className={`text-xs p-1 rounded border ${colorClass}`}
+                          className={`text-xs p-1 rounded border ${colorClass} relative`}
                           title={`${employee?.firstName} ${employee?.lastName}: ${schedule.startTime} - ${schedule.endTime}`}
                         >
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeletingSchedule(schedule);
+                            }}
+                            className="absolute top-0 right-0 p-0.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-bl"
+                            title={t('common.delete')}
+                          >
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
                           <div 
-                            className="cursor-pointer hover:opacity-80"
+                            className="cursor-pointer hover:opacity-80 pr-4"
                             onClick={() => handleEdit(schedule)}
                           >
                             <div className="font-medium truncate">
@@ -507,25 +968,10 @@ export default function ShiftSchedulePage() {
                               {schedule.startTime} - {schedule.endTime}
                             </div>
                           </div>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeletingSchedule(schedule);
-                            }}
-                            className="mt-1 text-red-600 hover:text-red-800 text-xs w-full text-left"
-                            title={t('common.delete')}
-                          >
-                            {t('common.delete')}
-                          </button>
                         </div>
                       );
                     })}
-                    {day.schedules.length > 3 && (
-                      <div className="text-xs text-gray-500 text-center">
-                        +{day.schedules.length - 3} {t('shiftSchedule.more')}
-                      </div>
-                    )}
-                    {day.schedules.length === 0 && (
+                    {day.schedules.length === 0 && day.leaves.size === 0 && (
                       <button
                         onClick={() => handleDayClick(day.date)}
                         className="text-xs text-gray-400 hover:text-indigo-600 w-full text-left"
@@ -541,13 +987,25 @@ export default function ShiftSchedulePage() {
         </div>
       )}
 
-      {/* Create/Edit Form */}
-      {showCreateForm && (
-        <div className="bg-white p-6 rounded-lg shadow-sm border mb-6">
-          <h3 className="text-lg font-semibold mb-4">
-            {editingSchedule ? t('shiftSchedule.editSchedule') : t('shiftSchedule.createSchedule')}
-          </h3>
-          <form onSubmit={handleSubmit} className="space-y-4">
+      {/* Create/Edit Form Modal */}
+      <Modal
+        isOpen={showCreateForm}
+        onClose={() => {
+          setShowCreateForm(false);
+          setEditingSchedule(null);
+          setSelectedDate(null);
+          setFormData({
+            employeeId: '',
+            startTime: lastStartTime,
+            endTime: lastEndTime,
+            isActive: true,
+            notes: '',
+          });
+        }}
+        title={editingSchedule ? t('shiftSchedule.editSchedule') : t('shiftSchedule.createSchedule')}
+        size="lg"
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">
                 {t('shiftSchedule.employee')} <span className="text-red-500">*</span>
@@ -560,13 +1018,11 @@ export default function ShiftSchedulePage() {
                 disabled={!!editingSchedule || !!selectedEmployeeId}
               >
                 <option value="">{t('shiftSchedule.selectEmployee')}</option>
-                {employees
-                  .filter(emp => emp.status === 'ACTIVE' && emp.user?.role !== 'OWNER')
-                  .map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.firstName} {emp.lastName} ({emp.employeeCode})
-                    </option>
-                  ))}
+                {employees.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.firstName} {emp.lastName} ({emp.employeeCode})
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -720,8 +1176,8 @@ export default function ShiftSchedulePage() {
                   setScheduleType('specific');
                   setFormData({
                     employeeId: selectedEmployeeId || '',
-                    startTime: '09:00',
-                    endTime: '17:00',
+                    startTime: lastStartTime,
+                    endTime: lastEndTime,
                     isActive: true,
                     notes: '',
                   });
@@ -731,8 +1187,7 @@ export default function ShiftSchedulePage() {
               </Button>
             </div>
           </form>
-        </div>
-      )}
+      </Modal>
 
       {/* Schedules List View */}
       {viewMode === 'list' && (
@@ -812,6 +1267,80 @@ export default function ShiftSchedulePage() {
           )}
         </div>
       </div>
+      )}
+
+      {/* All Schedules Modal */}
+      {selectedDayForModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="p-6 border-b">
+              <h3 className="text-lg font-semibold">
+                {t('shiftSchedule.allSchedulesFor')} {selectedDayForModal.date.toFormat('dd MMM yyyy')}
+              </h3>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <div className="space-y-3">
+                {selectedDayForModal.schedules.map((schedule: ShiftSchedule) => {
+                  const employee = employees.find(e => e.id === schedule.employeeId);
+                  const colorClass = employeeColors.get(schedule.employeeId) || 'bg-gray-100 text-gray-800 border-gray-200';
+                  const isRecurring = schedule.date === null;
+                  return (
+                    <div
+                      key={schedule.id}
+                      className={`p-3 rounded-lg border ${colorClass}`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="font-medium">
+                            {employee ? `${employee.firstName} ${employee.lastName}` : 'N/A'}
+                            {isRecurring && <span className="ml-2 text-xs opacity-75">🔄 {t('shiftSchedule.recurring')}</span>}
+                          </div>
+                          <div className="text-sm mt-1">
+                            {schedule.startTime} - {schedule.endTime}
+                          </div>
+                          {schedule.notes && (
+                            <div className="text-xs opacity-75 mt-1">
+                              {schedule.notes}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              handleEdit(schedule);
+                              setSelectedDayForModal(null);
+                            }}
+                            className="text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50"
+                          >
+                            {t('common.edit')}
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeletingSchedule(schedule);
+                              setSelectedDayForModal(null);
+                            }}
+                            className="text-xs text-red-600 hover:text-red-800 px-2 py-1 rounded hover:bg-red-50"
+                          >
+                            {t('common.delete')}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="p-6 border-t flex justify-end">
+              <Button
+                variant="secondary"
+                onClick={() => setSelectedDayForModal(null)}
+              >
+                {t('common.close')}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Delete Confirmation Modal */}

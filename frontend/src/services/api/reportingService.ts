@@ -7,6 +7,18 @@ export interface AttendanceSummary {
   lateDays: number;
   onLeaveDays: number;
   totalHours: number;
+  totalLateMinutes?: number;
+  lateByEmployee?: Array<{
+    employee: {
+      id: string;
+      employeeCode: string;
+      firstName: string;
+      lastName: string;
+    };
+    totalLateMinutes: number;
+    totalLateHours: number;
+    lateCount: number;
+  }>;
   attendances: any[];
 }
 

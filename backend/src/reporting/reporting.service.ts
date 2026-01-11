@@ -40,13 +40,38 @@ export class ReportingService {
       orderBy: { date: 'desc' },
     });
 
+    // Calculate late accumulation by employee
+    const lateByEmployee = attendances.reduce((acc, a) => {
+      const empId = a.employeeId;
+      if (!acc[empId]) {
+        acc[empId] = {
+          employee: a.employee,
+          totalLateMinutes: 0,
+          lateCount: 0,
+        };
+      }
+      const lateMinutes = (a as any).lateMinutes || 0;
+      if (lateMinutes > 0) {
+        acc[empId].totalLateMinutes += lateMinutes;
+        acc[empId].lateCount += 1;
+      }
+      return acc;
+    }, {} as Record<string, { employee: any; totalLateMinutes: number; lateCount: number }>);
+
     const summary = {
       totalDays: attendances.length,
       presentDays: attendances.filter(a => a.status === 'PRESENT').length,
       absentDays: attendances.filter(a => a.status === 'ABSENT').length,
-      lateDays: attendances.filter(a => a.status === 'LATE').length,
+      lateDays: attendances.filter(a => a.status === 'LATE' || ((a as any).lateMinutes && (a as any).lateMinutes > 0)).length,
       onLeaveDays: attendances.filter(a => a.status === 'ON_LEAVE').length,
       totalHours: attendances.reduce((sum, a) => sum + (a.workDuration || 0), 0) / 60,
+      totalLateMinutes: attendances.reduce((sum, a) => sum + ((a as any).lateMinutes || 0), 0),
+      lateByEmployee: Object.values(lateByEmployee).map(emp => ({
+        employee: emp.employee,
+        totalLateMinutes: emp.totalLateMinutes,
+        totalLateHours: Math.round((emp.totalLateMinutes / 60) * 100) / 100,
+        lateCount: emp.lateCount,
+      })),
       attendances,
     };
 

@@ -8,6 +8,7 @@ export interface Employee {
   nik: string | null;
   phone: string | null;
   address: string | null;
+  division: string | null;
   joinDate: string;
   status: string;
   managerId: string | null;
@@ -59,6 +60,7 @@ export const employeeService = {
     nik?: string;
     phone?: string;
     address?: string;
+    division?: string;
     joinDate: string;
     status?: string;
     managerId?: string;
@@ -67,7 +69,7 @@ export const employeeService = {
     return response.data;
   },
 
-  async update(id: string, data: Partial<Employee> & { role?: string; email?: string }): Promise<Employee> {
+  async update(id: string, data: Partial<Employee> & { role?: string; email?: string; employeeCode?: string; joinDate?: string }): Promise<Employee> {
     const response = await apiClient.put(`/employees/${id}`, data);
     return response.data;
   },

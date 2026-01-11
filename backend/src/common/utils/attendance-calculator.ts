@@ -35,4 +35,38 @@ export function isWithinGracePeriod(
   return diff <= gracePeriodMinutes && diff >= -gracePeriodMinutes;
 }
 
+/**
+ * Calculate late minutes for clock in
+ * Returns 0 if on time or early, otherwise returns minutes late
+ */
+export function calculateLateMinutes(
+  actualTime: DateTime,
+  expectedTime: DateTime,
+  gracePeriodMinutes: number,
+): number {
+  const diff = actualTime.diff(expectedTime, 'minutes').minutes;
+  // If actual time is after expected time + grace period, calculate late minutes
+  if (diff > gracePeriodMinutes) {
+    return Math.round(diff - gracePeriodMinutes);
+  }
+  return 0;
+}
+
+/**
+ * Calculate early clock out minutes (negative late)
+ * Returns 0 if on time or late, otherwise returns minutes early (as negative)
+ */
+export function calculateEarlyOutMinutes(
+  actualTime: DateTime,
+  expectedTime: DateTime,
+  gracePeriodMinutes: number,
+): number {
+  const diff = expectedTime.diff(actualTime, 'minutes').minutes;
+  // If actual time is before expected time - grace period, calculate early minutes
+  if (diff > gracePeriodMinutes) {
+    return Math.round(diff - gracePeriodMinutes);
+  }
+  return 0;
+}
+
 

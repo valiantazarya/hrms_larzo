@@ -33,16 +33,15 @@ export function calculateLeaveAccrual(
   }
 
   const newAccrued = new Decimal(leaveType.accrualRate);
-  const currentBalanceDecimal = currentBalance
+  // currentBalance is the previous month's balance record
+  const previousBalanceDecimal = currentBalance
     ? new Decimal(currentBalance.balance)
     : new Decimal(0);
-  const newBalance = currentBalanceDecimal.add(newAccrued);
-
-  // Apply max balance cap
-  let cappedBalance = newBalance;
-  if (leaveType.maxBalance) {
-    cappedBalance = Decimal.min(newBalance, new Decimal(leaveType.maxBalance));
-  }
+  const previousUsed = currentBalance ? new Decimal(currentBalance.used) : new Decimal(0);
+  
+  // Calculate total accrued: previous month's net balance + previous month's used + new accrual
+  // This represents the total accrued amount (before current month's used is deducted)
+  const totalAccrued = previousBalanceDecimal.add(previousUsed).add(newAccrued);
 
   // Handle carryover
   let carriedOver = new Decimal(0);
@@ -53,6 +52,9 @@ export function calculateLeaveAccrual(
       : new Decimal(0);
     carriedOver = Decimal.min(previousYearBalance, maxCarryover);
   }
+
+  // Add carryover to total accrued
+  const totalWithCarryover = totalAccrued.add(carriedOver);
 
   // Handle expiry
   let expired = new Decimal(0);
@@ -69,12 +71,24 @@ export function calculateLeaveAccrual(
     );
   }
 
-  const finalBalance = cappedBalance.add(carriedOver).sub(expired);
+  // Subtract expired from total
+  const totalAfterExpiry = totalWithCarryover.sub(expired);
+
+  // Apply max balance cap to the total available (after carryover and expiry)
+  // The maxBalance represents the maximum total available balance (before current month's used is deducted)
+  let cappedTotal = totalAfterExpiry;
+  if (leaveType.maxBalance) {
+    cappedTotal = Decimal.min(totalAfterExpiry, new Decimal(leaveType.maxBalance));
+  }
+
+  // Return the total available balance (before current month's used is deducted)
+  // The caller (getLeaveBalance) will subtract the current month's used amount
+  const finalBalance = cappedTotal;
 
   return {
     balance: finalBalance,
     accrued: newAccrued,
-    used: currentBalance ? new Decimal(currentBalance.used) : new Decimal(0),
+    used: previousUsed, // Return previous month's used for reference
     carriedOver,
     expired,
     periodYear,

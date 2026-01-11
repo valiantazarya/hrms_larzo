@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
@@ -13,6 +13,7 @@ import { overtimeService, OvertimeRequest } from '../../services/api/overtimeSer
 import { Button } from '../../components/common/Button';
 import { ToastContainer } from '../../components/common/Toast';
 import { Pagination } from '../../components/common/Pagination';
+import { Modal } from '../../components/common/Modal';
 import { LanguageSwitcher } from '../../components/common/LanguageSwitcher';
 import PayrollPage from './PayrollPage';
 import ReportingPage from './ReportingPage';
@@ -149,8 +150,29 @@ function CompanySettings() {
         )}
       </div>
 
-      {isEditing ? (
-        <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-sm border space-y-4">
+      {/* Edit Company Settings Modal */}
+      <Modal
+        isOpen={isEditing}
+        onClose={() => {
+          setIsEditing(false);
+          if (company) {
+            setFormData({
+              name: company.name || '',
+              address: company.address || '',
+              phone: company.phone || '',
+              email: company.email || '',
+              npwp: company.npwp || '',
+              geofencingEnabled: company.geofencingEnabled || false,
+              geofencingLatitude: company.geofencingLatitude?.toString() || '',
+              geofencingLongitude: company.geofencingLongitude?.toString() || '',
+              geofencingRadius: company.geofencingRadius?.toString() || '',
+            });
+          }
+        }}
+        title={t('owner.companySettings')}
+        size="lg"
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1">{t('owner.companyName')}</label>
             <input
@@ -302,7 +324,9 @@ function CompanySettings() {
             </Button>
           </div>
         </form>
-      ) : (
+      </Modal>
+
+      {!isEditing && (
         <div className="bg-white p-6 rounded-lg shadow-sm border space-y-4">
           <div>
             <label className="text-sm text-gray-600">{t('owner.companyName')}</label>
@@ -391,6 +415,11 @@ function PolicyManagement() {
       setIsEditing(false);
       setJsonError(null);
       queryClient.invalidateQueries({ queryKey: ['policies'] });
+      // Also invalidate specific policy queries so employee pages refresh
+      queryClient.invalidateQueries({ queryKey: ['leavePolicy'] });
+      queryClient.invalidateQueries({ queryKey: ['attendancePolicy'] });
+      queryClient.invalidateQueries({ queryKey: ['overtimePolicy'] });
+      queryClient.invalidateQueries({ queryKey: ['payrollConfig'] });
     },
     onError: (error: any) => {
       toast.showToast(error.response?.data?.message || t('common.error'), 'error');
@@ -406,6 +435,11 @@ function PolicyManagement() {
       setSelectedPolicyType(null);
       setJsonError(null);
       queryClient.invalidateQueries({ queryKey: ['policies'] });
+      // Also invalidate specific policy queries so employee pages refresh
+      queryClient.invalidateQueries({ queryKey: ['leavePolicy'] });
+      queryClient.invalidateQueries({ queryKey: ['attendancePolicy'] });
+      queryClient.invalidateQueries({ queryKey: ['overtimePolicy'] });
+      queryClient.invalidateQueries({ queryKey: ['payrollConfig'] });
     },
     onError: (error: any) => {
       toast.showToast(error.response?.data?.message || t('common.error'), 'error');
@@ -614,7 +648,25 @@ function PolicyManagement() {
             </div>
           </div>
 
-          {isEditing || isCreating ? (
+          {/* Policy Edit/Create Modal */}
+          <Modal
+            isOpen={isEditing || isCreating}
+            onClose={() => {
+              setIsEditing(false);
+              setIsCreating(false);
+              setCreateAsNewVersion(false);
+              setJsonError(null);
+              if (selectedPolicy) {
+                setConfigText(JSON.stringify(selectedPolicy.config, null, 2));
+              }
+            }}
+            title={
+              isCreating || createAsNewVersion
+                ? t('owner.createPolicy')
+                : t('owner.editPolicy')
+            }
+            size="lg"
+          >
             <div className="space-y-4">
               <div>
                 <div className="flex justify-between items-center mb-1">
@@ -685,7 +737,9 @@ function PolicyManagement() {
                 </Button>
               </div>
             </div>
-          ) : selectedPolicy ? (
+          </Modal>
+
+          {!isEditing && !isCreating && selectedPolicy ? (
             <div>
               <pre className="bg-gray-50 p-4 rounded text-sm overflow-auto border">
                 {JSON.stringify(selectedPolicy.config, null, 2)}
@@ -729,9 +783,12 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
     nik: '',
     phone: '',
     address: '',
+    division: '',
+    employeeCode: '',
+    joinDate: '',
+    email: '',
     status: 'ACTIVE',
     role: 'EMPLOYEE',
-    managerId: '',
   });
   const [formData, setFormData] = useState({
     email: '',
@@ -743,9 +800,9 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
     nik: '',
     phone: '',
     address: '',
+    division: '',
     joinDate: new Date().toISOString().split('T')[0],
     status: 'ACTIVE',
-    managerId: '',
   });
   const [employmentData, setEmploymentData] = useState({
     type: '',
@@ -770,6 +827,45 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
     refetchOnMount: 'always',
     refetchOnWindowFocus: false,
   });
+
+  // Sorting state
+  const [sortField, setSortField] = useState<'name' | 'employeeCode' | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  // Sorted employees
+  const sortedEmployees = useMemo(() => {
+    if (!sortField) return employees;
+
+    return [...employees].sort((a, b) => {
+      let aValue: string;
+      let bValue: string;
+
+      if (sortField === 'name') {
+        aValue = `${a.firstName} ${a.lastName}`.toLowerCase();
+        bValue = `${b.firstName} ${b.lastName}`.toLowerCase();
+      } else if (sortField === 'employeeCode') {
+        aValue = a.employeeCode.toLowerCase();
+        bValue = b.employeeCode.toLowerCase();
+      } else {
+        return 0;
+      }
+
+      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [employees, sortField, sortDirection]);
+
+  const handleSort = (field: 'name' | 'employeeCode') => {
+    if (sortField === field) {
+      // Toggle direction if clicking the same field
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // Set new field and default to ascending
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
 
   const { data: selectedEmployeeData } = useQuery<Employee>({
     queryKey: ['employee', selectedEmployee?.id],
@@ -833,9 +929,9 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
         nik: '',
         phone: '',
         address: '',
+        division: '',
         joinDate: new Date().toISOString().split('T')[0],
         status: 'ACTIVE',
-        managerId: '',
       });
       // Invalidate and refetch to ensure data is updated immediately
       await queryClient.invalidateQueries({ queryKey: ['employees'] });
@@ -870,10 +966,10 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
     // Convert empty strings to undefined for optional fields
     const submitData = {
       ...formData,
-      managerId: formData.managerId || undefined,
       nik: formData.nik || undefined,
       phone: formData.phone || undefined,
       address: formData.address || undefined,
+      division: formData.division || undefined,
     };
     createMutation.mutate(submitData);
   };
@@ -930,7 +1026,7 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
 
   const updateManagerMutation = useMutation({
     mutationFn: ({ id, managerId }: { id: string; managerId: string | null }) =>
-      employeeService.update(id, { managerId: managerId || undefined }),
+      employeeService.update(id, { managerId: managerId === '' ? null : managerId }),
     onSuccess: async () => {
       toast.showToast(t('owner.managerUpdated'), 'success');
       setShowManagerForm(false);
@@ -955,15 +1051,21 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
 
   const handleOpenEditForm = (employee: Employee) => {
     setSelectedEmployeeForEdit(employee);
+    const joinDateStr = employee.joinDate 
+      ? new Date(employee.joinDate).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0];
     setEditFormData({
       firstName: employee.firstName,
       lastName: employee.lastName,
       nik: employee.nik || '',
       phone: employee.phone || '',
       address: employee.address || '',
+      division: employee.division || '',
+      employeeCode: employee.employeeCode,
+      joinDate: joinDateStr,
+      email: employee.user?.email || '',
       status: employee.status,
       role: employee.user?.role || 'EMPLOYEE',
-      managerId: employee.managerId || '',
     });
     setShowEditForm(true);
   };
@@ -976,10 +1078,17 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
         nik: data.nik || undefined,
         phone: data.phone || undefined,
         address: data.address || undefined,
+        division: data.division || undefined,
+        employeeCode: data.employeeCode,
+        joinDate: data.joinDate,
+        email: data.email,
         status: data.status as any,
         role: data.role as any,
-        // Clear managerId if role is MANAGER or STOCK_MANAGER (they can't have managers)
-        managerId: (data.role === 'MANAGER' || data.role === 'STOCK_MANAGER') ? undefined : (data.managerId || undefined),
+        // Clear managerId if role is MANAGER (managers can't have managers)
+        // Stock managers can have managers
+        // Note: managerId is managed separately via the Change Manager button
+        // But we need to clear it when role changes to MANAGER
+        managerId: (data.role === 'MANAGER') ? null : undefined,
       }),
     onSuccess: async () => {
       toast.showToast(t('owner.employeeUpdated'), 'success');
@@ -1063,7 +1172,7 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
   };
 
   // Get list of managers (employees with MANAGER role)
-  const managers = employees.filter(emp => emp.user?.role === 'MANAGER');
+  const managers = employees.filter(emp => emp.user?.role === 'MANAGER' || emp.user?.role === 'STOCK_MANAGER');
 
   const getManagerName = (managerId: string | null) => {
     if (!managerId) return '-';
@@ -1078,10 +1187,30 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
         <Button onClick={() => setShowCreateForm(true)}>{t('owner.createEmployee')}</Button>
       </div>
 
-      {showCreateForm && (
-        <div className="bg-white p-6 rounded-lg shadow-sm border mb-6">
-          <h3 className="text-lg font-semibold mb-4">{t('owner.createEmployee')}</h3>
-          <form onSubmit={handleSubmit} className="space-y-4">
+      {/* Create Employee Modal */}
+      <Modal
+        isOpen={showCreateForm}
+        onClose={() => {
+          setShowCreateForm(false);
+          setFormData({
+            email: '',
+            password: '',
+            role: 'EMPLOYEE',
+            employeeCode: '',
+            firstName: '',
+            lastName: '',
+            nik: '',
+            phone: '',
+            address: '',
+            division: '',
+            joinDate: new Date().toISOString().split('T')[0],
+            status: 'ACTIVE',
+          });
+        }}
+        title={t('owner.createEmployee')}
+        size="lg"
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-1">{t('owner.email')}</label>
@@ -1120,7 +1249,7 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
                 <label className="block text-sm font-medium mb-1">{t('owner.role')}</label>
                 <select
                   value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value, managerId: (e.target.value === 'MANAGER' || e.target.value === 'STOCK_MANAGER') ? '' : formData.managerId })}
+                  onChange={(e) => setFormData({ ...formData, role: e.target.value })}
                   className="w-full p-2 border rounded-md"
                   required
                 >
@@ -1131,28 +1260,6 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
                 </select>
               </div>
             </div>
-            {(formData.role === 'EMPLOYEE' || formData.role === 'SUPERVISOR' || formData.role === 'STOCK_MANAGER') && (
-              <div>
-                <label className="block text-sm font-medium mb-1">{t('owner.manager')}</label>
-                <select
-                  value={formData.managerId}
-                  onChange={(e) => setFormData({ ...formData, managerId: e.target.value })}
-                  className="w-full p-2 border rounded-md"
-                >
-                  <option value="">{t('owner.noManager')}</option>
-                  {employees
-                    .filter(emp => emp.user?.role === 'MANAGER' && emp.id !== formData.managerId)
-                    .map((manager) => (
-                      <option key={manager.id} value={manager.id}>
-                        {manager.firstName} {manager.lastName} ({manager.employeeCode})
-                      </option>
-                    ))}
-                </select>
-                <p className="text-xs text-gray-500 mt-1">
-                  {t('owner.managerHelpText')}
-                </p>
-              </div>
-            )}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-1">{t('owner.firstName')}</label>
@@ -1204,15 +1311,27 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
                 rows={2}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">{t('owner.joinDate')}</label>
-              <input
-                type="date"
-                value={formData.joinDate}
-                onChange={(e) => setFormData({ ...formData, joinDate: e.target.value })}
-                className="w-full p-2 border rounded-md"
-                required
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">{t('owner.division')}</label>
+                <input
+                  type="text"
+                  value={formData.division}
+                  onChange={(e) => setFormData({ ...formData, division: e.target.value })}
+                  className="w-full p-2 border rounded-md"
+                  placeholder={t('owner.divisionPlaceholder')}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">{t('owner.joinDate')}</label>
+                <input
+                  type="date"
+                  value={formData.joinDate}
+                  onChange={(e) => setFormData({ ...formData, joinDate: e.target.value })}
+                  className="w-full p-2 border rounded-md"
+                  required
+                />
+              </div>
             </div>
             <div className="flex gap-2">
               <Button type="submit" disabled={createMutation.isPending}>
@@ -1221,27 +1340,65 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => setShowCreateForm(false)}
+                onClick={() => {
+                  setShowCreateForm(false);
+                  setFormData({
+                    email: '',
+                    password: '',
+                    role: 'EMPLOYEE',
+                    employeeCode: '',
+                    firstName: '',
+                    lastName: '',
+                    nik: '',
+                    phone: '',
+                    address: '',
+                    division: '',
+                    joinDate: new Date().toISOString().split('T')[0],
+                    status: 'ACTIVE',
+                  });
+                }}
               >
                 {t('common.cancel')}
               </Button>
             </div>
           </form>
-        </div>
-      )}
+      </Modal>
 
       <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                {t('owner.employeeCode')}
+                <button
+                  onClick={() => handleSort('employeeCode')}
+                  className="flex items-center gap-1 hover:text-gray-700"
+                >
+                  {t('owner.employeeCode')}
+                  {sortField === 'employeeCode' && (
+                    <span className="text-indigo-600">
+                      {sortDirection === 'asc' ? '↑' : '↓'}
+                    </span>
+                  )}
+                </button>
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                {t('owner.name')}
+                <button
+                  onClick={() => handleSort('name')}
+                  className="flex items-center gap-1 hover:text-gray-700"
+                >
+                  {t('owner.name')}
+                  {sortField === 'name' && (
+                    <span className="text-indigo-600">
+                      {sortDirection === 'asc' ? '↑' : '↓'}
+                    </span>
+                  )}
+                </button>
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 {t('owner.email')}
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                {t('owner.division')}
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 {t('owner.role')}
@@ -1261,13 +1418,14 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {employees.map((emp) => (
+            {sortedEmployees.map((emp) => (
               <tr key={emp.id}>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">{emp.employeeCode}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   {emp.firstName} {emp.lastName}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">{emp.user?.email}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm">{emp.division || '-'}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">{emp.user?.role}</td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <span
@@ -1587,6 +1745,28 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
             <form onSubmit={handleEditSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
+                  <label className="block text-sm font-medium mb-1">{t('owner.employeeCode')}</label>
+                  <input
+                    type="text"
+                    value={editFormData.employeeCode}
+                    onChange={(e) => setEditFormData({ ...editFormData, employeeCode: e.target.value })}
+                    className="w-full p-2 border rounded-md"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">{t('owner.email')}</label>
+                  <input
+                    type="email"
+                    value={editFormData.email}
+                    onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
+                    className="w-full p-2 border rounded-md"
+                    required
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <label className="block text-sm font-medium mb-1">{t('owner.firstName')}</label>
                   <input
                     type="text"
@@ -1604,6 +1784,28 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
                     onChange={(e) => setEditFormData({ ...editFormData, lastName: e.target.value })}
                     className="w-full p-2 border rounded-md"
                     required
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">{t('owner.joinDate')}</label>
+                  <input
+                    type="date"
+                    value={editFormData.joinDate}
+                    onChange={(e) => setEditFormData({ ...editFormData, joinDate: e.target.value })}
+                    className="w-full p-2 border rounded-md"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">{t('owner.division')}</label>
+                  <input
+                    type="text"
+                    value={editFormData.division}
+                    onChange={(e) => setEditFormData({ ...editFormData, division: e.target.value })}
+                    className="w-full p-2 border rounded-md"
+                    placeholder={t('owner.divisionPlaceholder')}
                   />
                 </div>
               </div>
@@ -1646,8 +1848,6 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
                       setEditFormData({ 
                         ...editFormData, 
                         role: newRole,
-                        // Clear managerId if changing to MANAGER or STOCK_MANAGER (they can't have managers)
-                        managerId: (newRole === 'MANAGER' || newRole === 'STOCK_MANAGER') ? '' : editFormData.managerId
                       });
                     }}
                     className="w-full p-2 border rounded-md"
@@ -1681,28 +1881,6 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
                   </select>
                 </div>
               </div>
-              {(editFormData.role === 'EMPLOYEE' || editFormData.role === 'SUPERVISOR' || editFormData.role === 'STOCK_MANAGER') && (
-                <div>
-                  <label className="block text-sm font-medium mb-1">{t('owner.manager')}</label>
-                  <select
-                    value={editFormData.managerId}
-                    onChange={(e) => setEditFormData({ ...editFormData, managerId: e.target.value })}
-                    className="w-full p-2 border rounded-md"
-                  >
-                    <option value="">{t('owner.noManager')}</option>
-                    {employees
-                      .filter(emp => emp.user?.role === 'MANAGER' && emp.id !== selectedEmployeeForEdit.id)
-                      .map((manager) => (
-                        <option key={manager.id} value={manager.id}>
-                          {manager.firstName} {manager.lastName} ({manager.employeeCode})
-                        </option>
-                      ))}
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {t('owner.managerHelpText')}
-                  </p>
-                </div>
-              )}
               <div className="flex gap-2 justify-end">
                 <Button
                   type="button"
@@ -1828,7 +2006,17 @@ function EmployeeManagement({ toast }: { toast: ReturnType<typeof useToast> }) {
 
 // Approval Inbox Component for Owner (can see all employees)
 function OwnerApprovalInbox() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  
+  // Helper function to get translated leave type name
+  const getLeaveTypeName = (leaveType?: { name?: string; nameId?: string }): string => {
+    if (!leaveType) return 'N/A';
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && leaveType.nameId) {
+      return leaveType.nameId;
+    }
+    return leaveType.name || 'N/A';
+  };
   const toast = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'attendance' | 'leave' | 'overtime'>('leave');
@@ -1897,9 +2085,11 @@ function OwnerApprovalInbox() {
 
   const approveAttendanceMutation = useMutation({
     mutationFn: attendanceService.approveAdjustment,
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.showToast(t('manager.approved'), 'success');
-      queryClient.invalidateQueries({ queryKey: ['attendanceAdjustments'] });
+      await queryClient.invalidateQueries({ queryKey: ['attendanceAdjustments'] });
+      await queryClient.invalidateQueries({ queryKey: ['pendingApprovalsCount'] });
+      await queryClient.refetchQueries({ queryKey: ['attendanceAdjustments', 'pending', 'owner'] });
     },
     onError: (error: any) => {
       toast.showToast(error.response?.data?.message || t('common.error'), 'error');
@@ -1909,9 +2099,11 @@ function OwnerApprovalInbox() {
   const rejectAttendanceMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       attendanceService.rejectAdjustment(id, reason),
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.showToast(t('manager.rejected'), 'success');
-      queryClient.invalidateQueries({ queryKey: ['attendanceAdjustments'] });
+      await queryClient.invalidateQueries({ queryKey: ['attendanceAdjustments'] });
+      await queryClient.invalidateQueries({ queryKey: ['pendingApprovalsCount'] });
+      await queryClient.refetchQueries({ queryKey: ['attendanceAdjustments', 'pending', 'owner'] });
       setRejectReason(null);
     },
     onError: (error: any) => {
@@ -1921,10 +2113,14 @@ function OwnerApprovalInbox() {
 
   const approveLeaveMutation = useMutation({
     mutationFn: leaveService.approveRequest,
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.showToast(t('manager.approved'), 'success');
-      queryClient.invalidateQueries({ queryKey: ['leaveRequests'] });
-      queryClient.invalidateQueries({ queryKey: ['leaveBalances'] });
+      // Invalidate and refetch all related queries
+      await queryClient.invalidateQueries({ queryKey: ['leaveRequests'] });
+      await queryClient.invalidateQueries({ queryKey: ['leaveBalances'] });
+      await queryClient.invalidateQueries({ queryKey: ['pendingApprovalsCount'] });
+      // Refetch the pending leave requests to update the list immediately
+      await queryClient.refetchQueries({ queryKey: ['leaveRequests', 'pending', 'owner'] });
     },
     onError: (error: any) => {
       toast.showToast(error.response?.data?.message || t('common.error'), 'error');
@@ -1934,9 +2130,13 @@ function OwnerApprovalInbox() {
   const rejectLeaveMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       leaveService.rejectRequest(id, reason),
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.showToast(t('manager.rejected'), 'success');
-      queryClient.invalidateQueries({ queryKey: ['leaveRequests'] });
+      // Invalidate and refetch all related queries
+      await queryClient.invalidateQueries({ queryKey: ['leaveRequests'] });
+      await queryClient.invalidateQueries({ queryKey: ['pendingApprovalsCount'] });
+      // Refetch the pending leave requests to update the list immediately
+      await queryClient.refetchQueries({ queryKey: ['leaveRequests', 'pending', 'owner'] });
       setRejectReason(null);
     },
     onError: (error: any) => {
@@ -1946,9 +2146,11 @@ function OwnerApprovalInbox() {
 
   const approveOvertimeMutation = useMutation({
     mutationFn: overtimeService.approveRequest,
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.showToast(t('manager.approved'), 'success');
-      queryClient.invalidateQueries({ queryKey: ['overtimeRequests'] });
+      await queryClient.invalidateQueries({ queryKey: ['overtimeRequests'] });
+      await queryClient.invalidateQueries({ queryKey: ['pendingApprovalsCount'] });
+      await queryClient.refetchQueries({ queryKey: ['overtimeRequests', 'pending', 'owner'] });
     },
     onError: (error: any) => {
       toast.showToast(error.response?.data?.message || t('common.error'), 'error');
@@ -1958,9 +2160,11 @@ function OwnerApprovalInbox() {
   const rejectOvertimeMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       overtimeService.rejectRequest(id, reason),
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.showToast(t('manager.rejected'), 'success');
-      queryClient.invalidateQueries({ queryKey: ['overtimeRequests'] });
+      await queryClient.invalidateQueries({ queryKey: ['overtimeRequests'] });
+      await queryClient.invalidateQueries({ queryKey: ['pendingApprovalsCount'] });
+      await queryClient.refetchQueries({ queryKey: ['overtimeRequests', 'pending', 'owner'] });
       setRejectReason(null);
     },
     onError: (error: any) => {
@@ -2090,7 +2294,7 @@ function OwnerApprovalInbox() {
                   <div>
                     <div className="font-semibold">{getEmployeeName(request.employeeId)}</div>
                     <div className="text-sm text-gray-600">
-                      {request.leaveType?.name || 'N/A'}
+                      {getLeaveTypeName(request.leaveType)}
                     </div>
                     <div className="text-sm text-gray-600">
                       {new Date(request.startDate).toLocaleDateString()} -{' '}
@@ -2228,7 +2432,17 @@ function OwnerApprovalInbox() {
 
 // Approval History Component for Owner
 function OwnerApprovalHistory() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  
+  // Helper function to get translated leave type name
+  const getLeaveTypeName = (leaveType?: { name?: string; nameId?: string }): string => {
+    if (!leaveType) return 'N/A';
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && leaveType.nameId) {
+      return leaveType.nameId;
+    }
+    return leaveType.name || 'N/A';
+  };
   const [activeTab, setActiveTab] = useState<'attendance' | 'leave' | 'overtime'>('leave');
   const [attendanceHistoryPage, setAttendanceHistoryPage] = useState(1);
   const [leaveHistoryPage, setLeaveHistoryPage] = useState(1);
@@ -2459,7 +2673,7 @@ function OwnerApprovalHistory() {
                       {getStatusBadge(request.status)}
                     </div>
                     <div className="text-sm text-gray-600">
-                      {request.leaveType?.name || 'N/A'}
+                      {getLeaveTypeName(request.leaveType)}
                     </div>
                     <div className="text-sm text-gray-600">
                       {new Date(request.startDate).toLocaleDateString()} -{' '}
@@ -2589,7 +2803,7 @@ function OwnerApprovalHistory() {
 
 // Leave Type Management Component
 function LeaveTypeManagement() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [editingType, setEditingType] = useState<string | null>(null);
@@ -2606,6 +2820,32 @@ function LeaveTypeManagement() {
     carryoverMax: null,
     expiresAfterMonths: null,
   });
+
+  // Fetch leave policy
+  const { data: leavePolicy } = useQuery<Policy>({
+    queryKey: ['leavePolicy'],
+    queryFn: () => policyService.getByType('LEAVE_POLICY'),
+    retry: false, // Don't retry if policy doesn't exist
+  });
+
+  // Extract policy settings
+  const policyConfig = leavePolicy?.config || {};
+  const accrualMethod = policyConfig.accrualMethod || null;
+  const hasAccrual = accrualMethod && accrualMethod !== 'NONE';
+  const maxBalance = policyConfig.maxBalance;
+  const carryoverAllowed = policyConfig.carryoverAllowed ?? true;
+  const carryoverMax = policyConfig.carryoverMax;
+  const expiresAfterMonths = policyConfig.expiresAfterMonths;
+  const requiresApproval = policyConfig.requiresApproval ?? true;
+
+  // Helper function to get translated leave type name
+  const getLeaveTypeName = (type: LeaveType): string => {
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && type.nameId) {
+      return type.nameId;
+    }
+    return type.name;
+  };
 
   const { data: leaveTypes = [], isLoading } = useQuery<LeaveType[]>({
     queryKey: ['leaveTypes', 'all'],
@@ -2643,9 +2883,11 @@ function LeaveTypeManagement() {
       id,
       data: {
         maxBalance: formData.maxBalance || null,
-        accrualRate: formData.accrualRate || null,
-        carryoverAllowed: formData.carryoverAllowed,
-        carryoverMax: formData.carryoverMax || null,
+        // Only set accrualRate if accrual is enabled by policy
+        accrualRate: hasAccrual ? (formData.accrualRate || null) : null,
+        // Only set carryover if allowed by policy
+        carryoverAllowed: carryoverAllowed ? formData.carryoverAllowed : false,
+        carryoverMax: carryoverAllowed ? (formData.carryoverMax || null) : null,
         expiresAfterMonths: formData.expiresAfterMonths || null,
       },
     });
@@ -2662,8 +2904,14 @@ function LeaveTypeManagement() {
     });
   };
 
-  // Map common leave type codes to display names
-  const getLeaveTypeDisplayName = (code: string, name: string) => {
+  // Map common leave type codes to display names (fallback if nameId not available)
+  const getLeaveTypeDisplayName = (type: LeaveType) => {
+    // First try to use translation helper
+    const translatedName = getLeaveTypeName(type);
+    if (translatedName !== type.name) {
+      return translatedName; // nameId was used
+    }
+    // Fallback to code-based translation
     const codeMap: Record<string, string> = {
       'ANNUAL': t('owner.annualLeave'),
       'MATERNITY': t('owner.maternityLeave'),
@@ -2672,7 +2920,7 @@ function LeaveTypeManagement() {
       'PATERNITY': t('owner.paternityLeave'),
       'UNPAID': t('owner.unpaidLeave'),
     };
-    return codeMap[code] || name;
+    return codeMap[type.code] || type.name;
   };
 
   if (isLoading) {
@@ -2697,15 +2945,21 @@ function LeaveTypeManagement() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   {t('owner.maxBalance')} ({t('owner.days')})
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('owner.accrualRate')} ({t('owner.daysPerMonth')})
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('owner.carryoverAllowed')}
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('owner.carryoverMax')} ({t('owner.days')})
-                </th>
+                {hasAccrual && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {t('owner.accrualRate')} ({t('owner.daysPerMonth')})
+                  </th>
+                )}
+                {carryoverAllowed && (
+                  <>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('owner.carryoverAllowed')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('owner.carryoverMax')} ({t('owner.days')})
+                    </th>
+                  </>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   {t('owner.expiresAfter')} ({t('owner.months')})
                 </th>
@@ -2719,7 +2973,7 @@ function LeaveTypeManagement() {
                 <tr key={type.id}>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="font-medium text-gray-900">
-                      {getLeaveTypeDisplayName(type.code, type.name)}
+                      {getLeaveTypeDisplayName(type)}
                     </div>
                     <div className="text-sm text-gray-500">{type.code}</div>
                   </td>
@@ -2740,51 +2994,57 @@ function LeaveTypeManagement() {
                           placeholder="-"
                         />
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={formData.accrualRate ?? ''}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              accrualRate: e.target.value ? parseFloat(e.target.value) : null,
-                            })
-                          }
-                          className="w-20 p-1 border rounded text-sm"
-                          placeholder="-"
-                        />
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <input
-                          type="checkbox"
-                          checked={formData.carryoverAllowed}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              carryoverAllowed: e.target.checked,
-                            })
-                          }
-                          className="rounded"
-                        />
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <input
-                          type="number"
-                          min="0"
-                          value={formData.carryoverMax ?? ''}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              carryoverMax: e.target.value ? parseInt(e.target.value) : null,
-                            })
-                          }
-                          className="w-20 p-1 border rounded text-sm"
-                          placeholder="-"
-                          disabled={!formData.carryoverAllowed}
-                        />
-                      </td>
+                      {hasAccrual && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={formData.accrualRate ?? ''}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                accrualRate: e.target.value ? parseFloat(e.target.value) : null,
+                              })
+                            }
+                            className="w-20 p-1 border rounded text-sm"
+                            placeholder="-"
+                          />
+                        </td>
+                      )}
+                      {carryoverAllowed && (
+                        <>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <input
+                              type="checkbox"
+                              checked={formData.carryoverAllowed}
+                              onChange={(e) =>
+                                setFormData({
+                                  ...formData,
+                                  carryoverAllowed: e.target.checked,
+                                })
+                              }
+                              className="rounded"
+                            />
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <input
+                              type="number"
+                              min="0"
+                              value={formData.carryoverMax ?? ''}
+                              onChange={(e) =>
+                                setFormData({
+                                  ...formData,
+                                  carryoverMax: e.target.value ? parseInt(e.target.value) : null,
+                                })
+                              }
+                              className="w-20 p-1 border rounded text-sm"
+                              placeholder="-"
+                              disabled={!formData.carryoverAllowed}
+                            />
+                          </td>
+                        </>
+                      )}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <input
                           type="number"
@@ -2825,15 +3085,21 @@ function LeaveTypeManagement() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {type.maxBalance ?? '-'}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {type.accrualRate ? Number(type.accrualRate).toFixed(2) : '-'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {type.carryoverAllowed ? t('common.yes') : t('common.no')}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {type.carryoverMax ?? '-'}
-                      </td>
+                      {hasAccrual && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {type.accrualRate ? Number(type.accrualRate).toFixed(2) : '-'}
+                        </td>
+                      )}
+                      {carryoverAllowed && (
+                        <>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {type.carryoverAllowed ? t('common.yes') : t('common.no')}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {type.carryoverMax ?? '-'}
+                          </td>
+                        </>
+                      )}
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {type.expiresAfterMonths ?? '-'}
                       </td>

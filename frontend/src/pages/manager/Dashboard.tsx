@@ -21,7 +21,17 @@ import ManagerAttendanceAdjustment from './ManagerAttendanceAdjustment';
 import { ChangePassword } from '../../components/common/ChangePassword';
 
 function ApprovalInbox() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  
+  // Helper function to get translated leave type name
+  const getLeaveTypeName = (leaveType?: { name?: string; nameId?: string }): string => {
+    if (!leaveType) return 'N/A';
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && leaveType.nameId) {
+      return leaveType.nameId;
+    }
+    return leaveType.name || 'N/A';
+  };
   const toast = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'attendance' | 'leave' | 'overtime'>('leave');
@@ -840,7 +850,17 @@ function ManagerAttendance({ onNavigateToAdjustment }: { onNavigateToAdjustment:
 
 
 function ApprovalHistory() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  
+  // Helper function to get translated leave type name
+  const getLeaveTypeName = (leaveType?: { name?: string; nameId?: string }): string => {
+    if (!leaveType) return 'N/A';
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && leaveType.nameId) {
+      return leaveType.nameId;
+    }
+    return leaveType.name || 'N/A';
+  };
   const [activeTab, setActiveTab] = useState<'attendance' | 'leave' | 'overtime'>('leave');
   const [attendanceHistoryPage, setAttendanceHistoryPage] = useState(1);
   const [leaveHistoryPage, setLeaveHistoryPage] = useState(1);
@@ -1077,7 +1097,7 @@ function ApprovalHistory() {
                       {getStatusBadge(request.status)}
                     </div>
                     <div className="text-sm text-gray-600">
-                      {request.leaveType?.name || 'N/A'}
+                      {getLeaveTypeName(request.leaveType)}
                     </div>
                     <div className="text-sm text-gray-600">
                       {new Date(request.startDate).toLocaleDateString()} -{' '}

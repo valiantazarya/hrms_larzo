@@ -6,6 +6,7 @@ import { overtimeService, OvertimeRequest } from '../../services/api/overtimeSer
 import { Button } from '../../components/common/Button';
 import { ToastContainer } from '../../components/common/Toast';
 import { Pagination } from '../../components/common/Pagination';
+import { Modal } from '../../components/common/Modal';
 
 export default function OvertimePage() {
   const { t } = useTranslation();
@@ -184,13 +185,21 @@ export default function OvertimePage() {
         </Button>
       </div>
 
-      {/* Request Form */}
-      {showRequestForm && (
-        <div className="bg-white p-4 rounded-lg shadow-sm border">
-          <h3 className="font-semibold mb-4">
-            {editingRequestId ? t('overtime.editRequest') : t('overtime.newRequest')}
-          </h3>
-          <form onSubmit={handleSubmit} className="space-y-4">
+      {/* Request Form Modal */}
+      <Modal
+        isOpen={showRequestForm}
+        onClose={() => {
+          setShowRequestForm(false);
+          setEditingRequestId(null);
+          setDate('');
+          setDuration('');
+          setReason('');
+          setNotes('');
+        }}
+        title={editingRequestId ? t('overtime.editRequest') : t('overtime.newRequest')}
+        size="md"
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">
                 {t('overtime.date')}
@@ -277,8 +286,7 @@ export default function OvertimePage() {
               </Button>
             </div>
           </form>
-        </div>
-      )}
+      </Modal>
 
       {/* Request List */}
       <div className="space-y-3">

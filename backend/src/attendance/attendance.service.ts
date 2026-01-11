@@ -10,7 +10,7 @@ import { ShiftScheduleService } from '../shift-schedule/shift-schedule.service';
 import { DateTime } from 'luxon';
 import { getTodayDateForDatabase } from '../common/utils/date-helper';
 import { AttendanceStatus, ApprovalStatus, Role } from '../types/enums';
-import { calculateWorkDuration, AttendancePolicy } from '../common/utils/attendance-calculator';
+import { calculateWorkDuration, AttendancePolicy, calculateLateMinutes, calculateEarlyOutMinutes } from '../common/utils/attendance-calculator';
 import { isWithinGeofence } from '../common/utils/geofencing';
 import { CreateAttendanceAdjustmentDto } from './dto/create-adjustment.dto';
 import { UpdateAttendanceAdjustmentDto } from './dto/update-adjustment.dto';
@@ -165,6 +165,23 @@ export class AttendanceService {
       ? notes
       : `${notes ? notes + ' | ' : ''}Clock-in outside scheduled shift (overtime)`;
 
+    // Calculate late minutes for clock in
+    let lateMinutes = 0;
+    const schedule = await this.shiftScheduleService.getEmployeeScheduleForDate(employeeId, now.toJSDate());
+    if (schedule && schedule.isActive) {
+      // Get expected clock in time from schedule
+      const [startHour, startMin] = schedule.startTime.split(':').map(Number);
+      const expectedClockIn = now.set({ hour: startHour, minute: startMin, second: 0, millisecond: 0 });
+      
+      // Calculate late minutes
+      lateMinutes = calculateLateMinutes(now, expectedClockIn, policyConfig.gracePeriodMinutes);
+      
+      // Update status to LATE if late
+      if (lateMinutes > 0) {
+        // Status will be set to LATE below
+      }
+    }
+
     return this.prisma.attendance.upsert({
       where: {
         employeeId_date: {
@@ -176,19 +193,21 @@ export class AttendanceService {
         clockIn: now.toJSDate(),
         clockInLatitude: latitude ? latitude : null,
         clockInLongitude: longitude ? longitude : null,
-        status: AttendanceStatus.PRESENT,
+        status: lateMinutes > 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT,
+        lateMinutes: lateMinutes > 0 ? lateMinutes : null,
         notes: notesWithSchedule,
         updatedAt: new Date(),
-      },
+      } as any,
       create: {
         employeeId,
         date: today,
         clockIn: now.toJSDate(),
         clockInLatitude: latitude ? latitude : null,
         clockInLongitude: longitude ? longitude : null,
-        status: AttendanceStatus.PRESENT,
+        status: lateMinutes > 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT,
+        lateMinutes: lateMinutes > 0 ? lateMinutes : null,
         notes: notesWithSchedule,
-      },
+      } as any,
     });
   }
 
@@ -301,6 +320,22 @@ export class AttendanceService {
       ? notes
       : `${notes ? notes + ' | ' : ''}Clock-out outside scheduled shift (overtime)`;
 
+    // Calculate late minutes for clock out (early clock out)
+    let earlyOutMinutes = 0;
+    const schedule = await this.shiftScheduleService.getEmployeeScheduleForDate(employeeId, now.toJSDate());
+    if (schedule && schedule.isActive) {
+      // Get expected clock out time from schedule
+      const [endHour, endMin] = schedule.endTime.split(':').map(Number);
+      const expectedClockOut = now.set({ hour: endHour, minute: endMin, second: 0, millisecond: 0 });
+      
+      // Calculate early out minutes (if clocking out before expected time - grace period)
+      earlyOutMinutes = calculateEarlyOutMinutes(now, expectedClockOut, policyConfig.gracePeriodMinutes);
+    }
+
+    // Calculate total late minutes (clock in late + early clock out)
+    const existingLateMinutes = (attendance as any).lateMinutes || 0;
+    const totalLateMinutes = existingLateMinutes + earlyOutMinutes;
+
     const workDuration = calculateWorkDuration(
       clockIn,
       clockOut,
@@ -319,9 +354,10 @@ export class AttendanceService {
         clockOutLatitude: latitude ? latitude : null,
         clockOutLongitude: longitude ? longitude : null,
         workDuration,
+        lateMinutes: totalLateMinutes > 0 ? totalLateMinutes : null,
         notes: notesWithSchedule || attendance.notes,
         updatedAt: new Date(),
-      },
+      } as any,
     });
   }
 
@@ -682,8 +718,8 @@ export class AttendanceService {
     if (adjustment.clockIn) updateData.clockIn = adjustment.clockIn;
     if (adjustment.clockOut) updateData.clockOut = adjustment.clockOut;
 
-    // Recalculate work duration if needed
-    if (updateData.clockIn && updateData.clockOut) {
+    // Recalculate work duration and late minutes if needed
+    if (updateData.clockIn || updateData.clockOut) {
       const employee = await this.prisma.employee.findUnique({
         where: { id: adjustment.employeeId },
         include: { company: true },
@@ -705,14 +741,50 @@ export class AttendanceService {
         minimumWorkHours: 4,
       };
 
-      const clockIn = DateTime.fromJSDate(updateData.clockIn);
-      const clockOut = DateTime.fromJSDate(updateData.clockOut);
+      // Get the attendance date
+      const attendanceDate = adjustment.attendance.date;
+      const dateTime = DateTime.fromJSDate(attendanceDate).setZone('Asia/Jakarta');
 
-      updateData.workDuration = calculateWorkDuration(
-        clockIn,
-        clockOut,
-        policyConfig,
-      );
+      // Calculate late minutes for clock in if adjusted
+      let lateMinutes = 0;
+      if (updateData.clockIn) {
+        const schedule = await this.shiftScheduleService.getEmployeeScheduleForDate(adjustment.employeeId, attendanceDate);
+        if (schedule && schedule.isActive) {
+          const [startHour, startMin] = schedule.startTime.split(':').map(Number);
+          const expectedClockIn = dateTime.set({ hour: startHour, minute: startMin, second: 0, millisecond: 0 });
+          const actualClockIn = DateTime.fromJSDate(updateData.clockIn).setZone('Asia/Jakarta');
+          lateMinutes = calculateLateMinutes(actualClockIn, expectedClockIn, policyConfig.gracePeriodMinutes);
+        }
+      }
+
+      // Calculate early out minutes for clock out if adjusted
+      if (updateData.clockOut) {
+        const schedule = await this.shiftScheduleService.getEmployeeScheduleForDate(adjustment.employeeId, attendanceDate);
+        if (schedule && schedule.isActive) {
+          const [endHour, endMin] = schedule.endTime.split(':').map(Number);
+          const expectedClockOut = dateTime.set({ hour: endHour, minute: endMin, second: 0, millisecond: 0 });
+          const actualClockOut = DateTime.fromJSDate(updateData.clockOut).setZone('Asia/Jakarta');
+          const earlyOutMinutes = calculateEarlyOutMinutes(actualClockOut, expectedClockOut, policyConfig.gracePeriodMinutes);
+          lateMinutes += earlyOutMinutes;
+        }
+      }
+
+      if (updateData.clockIn && updateData.clockOut) {
+        const clockIn = DateTime.fromJSDate(updateData.clockIn);
+        const clockOut = DateTime.fromJSDate(updateData.clockOut);
+
+        updateData.workDuration = calculateWorkDuration(
+          clockIn,
+          clockOut,
+          policyConfig,
+        );
+      }
+
+      updateData.lateMinutes = lateMinutes > 0 ? lateMinutes : null;
+      // Update status to LATE if late
+      if (lateMinutes > 0 && adjustment.attendance.status === AttendanceStatus.PRESENT) {
+        updateData.status = AttendanceStatus.LATE;
+      }
     }
 
     updateData.adjustmentRequestId = adjustmentId;

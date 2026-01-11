@@ -5,10 +5,21 @@ import { useAuth } from '../../hooks/useAuth';
 import { useToast } from '../../hooks/useToast';
 import { shiftScheduleService, ShiftSchedule, WeeklySchedule } from '../../services/api/shiftScheduleService';
 import { attendanceService, Attendance } from '../../services/api/attendanceService';
+import { leaveService, LeaveRequest } from '../../services/api/leaveService';
 import { DateTime } from 'luxon';
 
 export default function ManagerShiftSchedulePage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  
+  // Helper function to get translated leave type name
+  const getLeaveTypeName = (leaveType?: { name?: string; nameId?: string }): string => {
+    if (!leaveType) return t('leave.title');
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && leaveType.nameId) {
+      return leaveType.nameId;
+    }
+    return leaveType.name || t('leave.title');
+  };
   const toast = useToast();
   
   // Days of week with translations
@@ -74,6 +85,34 @@ export default function ManagerShiftSchedulePage() {
     enabled: !!user?.employee?.id && !!weekStartDate && !!weekEndDate && viewMode === 'week',
   });
 
+  // Fetch approved leave requests for the current user
+  const { data: leaveRequests = [] } = useQuery<LeaveRequest[]>({
+    queryKey: ['leaveRequests', user?.employee?.id],
+    queryFn: () => leaveService.getRequests(user?.employee?.id),
+    enabled: !!user?.employee?.id,
+  });
+
+  // Filter approved leave requests and create a map by date
+  const approvedLeavesByDate = useMemo(() => {
+    const map = new Map<string, LeaveRequest[]>();
+    leaveRequests
+      .filter(req => req.status === 'APPROVED')
+      .forEach(leave => {
+        const start = DateTime.fromISO(leave.startDate).setZone('Asia/Jakarta').startOf('day');
+        const end = DateTime.fromISO(leave.endDate).setZone('Asia/Jakarta').startOf('day');
+        let current = start;
+        while (current <= end) {
+          const dateStr = current.toISODate() || '';
+          if (!map.has(dateStr)) {
+            map.set(dateStr, []);
+          }
+          map.get(dateStr)!.push(leave);
+          current = current.plus({ days: 1 });
+        }
+      });
+    return map;
+  }, [leaveRequests]);
+
   // Create a map of attendance by date for quick lookup
   const attendanceByDate = useMemo(() => {
     const map = new Map<string, Attendance>();
@@ -104,7 +143,7 @@ export default function ManagerShiftSchedulePage() {
   const calendarDays = useMemo(() => {
     const start = currentMonth.startOf('month').startOf('week');
     const end = currentMonth.endOf('month').endOf('week');
-    const days: Array<{ date: DateTime; isCurrentMonth: boolean; schedules: ShiftSchedule[] }> = [];
+    const days: Array<{ date: DateTime; isCurrentMonth: boolean; schedules: ShiftSchedule[]; leaves: LeaveRequest[] }> = [];
     
     let current = start;
     while (current <= end) {
@@ -131,15 +170,19 @@ export default function ManagerShiftSchedulePage() {
         return false;
       });
       
+      // Get approved leave requests for this day
+      const leaves = approvedLeavesByDate.get(dateStr) || [];
+      
       days.push({
         date: current,
         isCurrentMonth: current.month === currentMonth.month,
         schedules: daySchedules,
+        leaves,
       });
       current = current.plus({ days: 1 });
     }
     return days;
-  }, [currentMonth, schedules]);
+  }, [currentMonth, schedules, approvedLeavesByDate]);
 
   // Generate week days with schedules (handles both recurring and date-specific)
   const weekDays = useMemo(() => {
@@ -178,14 +221,18 @@ export default function ManagerShiftSchedulePage() {
       // The attendance.date field contains the date when the user clocked in/out
       const attendance = attendanceByDate.get(dateStr);
       
+      // Get approved leave requests for this day
+      const leaves = approvedLeavesByDate.get(dateStr) || [];
+      
       return {
         date: day,
         dayOfWeek,
         schedule,
         attendance,
+        leaves,
       };
     });
-  }, [weekStart, schedules, attendanceByDate]);
+  }, [weekStart, schedules, attendanceByDate, approvedLeavesByDate]);
 
   const handlePreviousWeek = () => {
     const newWeek = DateTime.fromISO(selectedWeek).minus({ weeks: 1 });
@@ -225,9 +272,10 @@ export default function ManagerShiftSchedulePage() {
   }
 
   return (
-    <div className="p-4 space-y-4">
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold">{t('shiftSchedule.mySchedule')}</h2>
+    <div className="p-4 md:p-6 space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <h2 className="text-2xl font-bold text-gray-900">{t('shiftSchedule.mySchedule')}</h2>
         
         {/* View Mode Toggle */}
         <div className="flex space-x-2 bg-gray-100 rounded-lg p-1">
@@ -235,7 +283,7 @@ export default function ManagerShiftSchedulePage() {
             onClick={() => setViewMode('calendar')}
             className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
               viewMode === 'calendar'
-                ? 'bg-indigo-600 text-white'
+                ? 'bg-indigo-600 text-white shadow-sm'
                 : 'text-gray-700 hover:bg-gray-200'
             }`}
           >
@@ -245,7 +293,7 @@ export default function ManagerShiftSchedulePage() {
             onClick={() => setViewMode('week')}
             className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
               viewMode === 'week'
-                ? 'bg-indigo-600 text-white'
+                ? 'bg-indigo-600 text-white shadow-sm'
                 : 'text-gray-700 hover:bg-gray-200'
             }`}
           >
@@ -256,12 +304,12 @@ export default function ManagerShiftSchedulePage() {
 
       {/* Calendar View */}
       {viewMode === 'calendar' && (
-        <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
+        <div className="bg-white rounded-lg shadow-sm border p-4 md:p-6">
           {/* Month Navigation */}
           <div className="flex items-center justify-between mb-6">
             <button
               onClick={handlePreviousMonth}
-              className="p-2 rounded-md hover:bg-gray-100"
+              className="p-2 rounded-md hover:bg-gray-100 transition-colors"
               aria-label={t('common.previous')}
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -269,19 +317,19 @@ export default function ManagerShiftSchedulePage() {
               </svg>
             </button>
             <div className="text-center">
-              <div className="text-xl font-semibold">
+              <div className="text-xl font-semibold text-gray-900">
                 {currentMonth.toFormat('MMMM yyyy')}
               </div>
               <button
                 onClick={handleCurrentMonth}
-                className="text-sm text-indigo-600 hover:text-indigo-800 mt-1"
+                className="text-sm text-indigo-600 hover:text-indigo-800 mt-1 transition-colors"
               >
                 {t('shiftSchedule.currentMonth')}
               </button>
             </div>
             <button
               onClick={handleNextMonth}
-              className="p-2 rounded-md hover:bg-gray-100"
+              className="p-2 rounded-md hover:bg-gray-100 transition-colors"
               aria-label={t('common.next')}
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -291,10 +339,10 @@ export default function ManagerShiftSchedulePage() {
           </div>
 
           {/* Calendar Grid */}
-          <div className="grid grid-cols-7 gap-2">
+          <div className="grid grid-cols-7 gap-2 md:gap-3">
             {/* Day Headers */}
             {DAYS_OF_WEEK.map((day) => (
-              <div key={day.value} className="text-center font-semibold text-gray-700 py-2">
+              <div key={day.value} className="text-center font-semibold text-gray-700 py-2 text-sm md:text-base">
                 {day.short}
               </div>
             ))}
@@ -302,20 +350,47 @@ export default function ManagerShiftSchedulePage() {
             {/* Calendar Days */}
             {calendarDays.map((day, index) => {
               const isToday = day.date.hasSame(DateTime.now().setZone('Asia/Jakarta'), 'day');
-              const daySchedule = day.schedules[0]; // For manager view, there should only be one schedule per day
+              const daySchedule = day.schedules[0];
+              const hasLeave = day.leaves.length > 0;
+              const hasSchedule = !!daySchedule;
               return (
                 <div
                   key={index}
-                  className={`min-h-24 border rounded-lg p-2 ${
-                    day.isCurrentMonth ? 'bg-white' : 'bg-gray-50'
-                  } ${isToday ? 'ring-2 ring-indigo-500' : ''}`}
+                  className={`min-h-20 md:min-h-24 border rounded-lg p-2 transition-colors ${
+                    hasLeave 
+                      ? 'bg-blue-50 border-blue-200' 
+                      : hasSchedule
+                        ? day.isCurrentMonth
+                          ? 'bg-indigo-50 border-indigo-200'
+                          : 'bg-indigo-100 border-indigo-300'
+                        : day.isCurrentMonth 
+                          ? 'bg-white border-gray-200' 
+                          : 'bg-gray-50 border-gray-100'
+                  } ${isToday ? 'ring-2 ring-indigo-500 ring-offset-1' : ''}`}
                 >
-                  <div className={`text-sm font-medium mb-1 ${isToday ? 'text-indigo-600' : day.isCurrentMonth ? 'text-gray-900' : 'text-gray-400'}`}>
+                  <div className={`text-sm md:text-base font-semibold mb-1.5 ${
+                    isToday 
+                      ? 'text-indigo-600' 
+                      : day.isCurrentMonth 
+                        ? 'text-gray-900' 
+                        : 'text-gray-400'
+                  }`}>
                     {day.date.day}
                   </div>
                   <div className="space-y-1">
-                    {daySchedule ? (
-                      <div className="text-xs p-1 rounded border bg-indigo-100 text-indigo-800 border-indigo-200">
+                    {hasLeave ? (
+                      <div className="text-xs p-1.5 rounded border bg-blue-100 text-blue-800 border-blue-200">
+                        <div className="font-medium truncate">
+                          🏖️ {getLeaveTypeName(day.leaves[0].leaveType)}
+                        </div>
+                        {day.leaves.length > 1 && (
+                          <div className="text-xs opacity-75 mt-1">
+                            +{day.leaves.length - 1} {t('shiftSchedule.more')}
+                          </div>
+                        )}
+                      </div>
+                    ) : daySchedule ? (
+                      <div className="text-xs p-1.5 rounded border bg-indigo-100 text-indigo-800 border-indigo-200">
                         <div className="font-medium truncate">
                           {daySchedule.startTime} - {daySchedule.endTime}
                         </div>
@@ -326,7 +401,7 @@ export default function ManagerShiftSchedulePage() {
                         )}
                       </div>
                     ) : (
-                      <div className="text-xs text-gray-400">
+                      <div className="text-xs text-gray-400 italic">
                         {t('shiftSchedule.noSchedule')}
                       </div>
                     )}
@@ -343,159 +418,188 @@ export default function ManagerShiftSchedulePage() {
         <>
           {/* Week Navigation */}
           <div className="bg-white p-4 rounded-lg shadow-sm border">
-        <div className="flex items-center justify-between mb-4">
-          <button
-            onClick={handlePreviousWeek}
-            className="p-2 rounded-md hover:bg-gray-100"
-            aria-label={t('common.previous')}
-          >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <div className="text-center">
-            <div className="font-semibold">
-              {weekStart.toFormat('dd MMM')} - {weekEnd.toFormat('dd MMM yyyy')}
-            </div>
-            <button
-              onClick={handleCurrentWeek}
-              className="text-sm text-indigo-600 hover:text-indigo-800 mt-1"
-            >
-              {t('shiftSchedule.currentWeek')}
-            </button>
-          </div>
-          <button
-            onClick={handleNextWeek}
-            className="p-2 rounded-md hover:bg-gray-100"
-            aria-label={t('common.next')}
-          >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      {/* Week Schedule */}
-      <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-        <div className="divide-y divide-gray-200">
-          {weekDays.map((day) => {
-            const dayName = DAYS_OF_WEEK.find(d => d.value === day.dayOfWeek);
-            const isToday = day.date.hasSame(DateTime.now().setZone('Asia/Jakarta'), 'day');
-            const hasAttendance = !!day.attendance;
-            const isCompleted = hasAttendance && day.attendance?.clockIn && day.attendance?.clockOut;
-            const isPartial = hasAttendance && day.attendance?.clockIn && !day.attendance?.clockOut;
-            
-            // Determine background color based on attendance status
-            let bgColor = '';
-            if (hasAttendance) {
-              if (isCompleted) {
-                bgColor = 'bg-green-50 border-l-4 border-green-500';
-              } else if (isPartial) {
-                bgColor = 'bg-yellow-50 border-l-4 border-yellow-500';
-              } else {
-                bgColor = 'bg-gray-50 border-l-4 border-gray-400';
-              }
-            } else if (isToday) {
-              bgColor = 'bg-indigo-50';
-            }
-
-            // Format clock in/out times
-            const formatTime = (timeStr: string | null) => {
-              if (!timeStr) return null;
-              return DateTime.fromISO(timeStr).setZone('Asia/Jakarta').toFormat('HH:mm');
-            };
-
-            const clockInTime = formatTime(day.attendance?.clockIn || null);
-            const clockOutTime = formatTime(day.attendance?.clockOut || null);
-            
-            return (
-              <div
-                key={day.date.toISODate()}
-                className={`p-4 ${bgColor}`}
+            <div className="flex items-center justify-between">
+              <button
+                onClick={handlePreviousWeek}
+                className="p-2 rounded-md hover:bg-gray-100 transition-colors"
+                aria-label={t('common.previous')}
               >
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <div className={`font-semibold ${isToday ? 'text-indigo-600' : ''}`}>
-                        {dayName?.label}
-                      </div>
-                      {isToday && (
-                        <span className="px-2 py-1 bg-indigo-100 text-indigo-800 text-xs rounded-full">
-                          {t('common.today')}
-                        </span>
-                      )}
-                      {hasAttendance && (
-                        <span className={`px-2 py-1 text-xs rounded-full ${
-                          isCompleted 
-                            ? 'bg-green-100 text-green-800' 
-                            : isPartial 
-                            ? 'bg-yellow-100 text-yellow-800'
-                            : 'bg-gray-100 text-gray-800'
-                        }`}>
-                          {isCompleted ? '✓' : isPartial ? '⏱' : '○'}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-sm text-gray-600 mt-1">
-                      {day.date.toFormat('dd MMM yyyy')}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    {hasAttendance ? (
-                      <div className="space-y-1">
-                        {/* Show actual clock in/out times */}
-                        {clockInTime && (
-                          <div className="text-sm">
-                            <span className="text-gray-600">{t('attendance.clockIn')}:</span>
-                            <span className="font-medium ml-1 text-green-700">{clockInTime}</span>
-                          </div>
-                        )}
-                        {clockOutTime && (
-                          <div className="text-sm">
-                            <span className="text-gray-600">{t('attendance.clockOut')}:</span>
-                            <span className="font-medium ml-1 text-red-700">{clockOutTime}</span>
-                          </div>
-                        )}
-                        {!clockOutTime && clockInTime && (
-                          <div className="text-xs text-yellow-600 italic">
-                            {t('attendance.clockedIn')}
-                          </div>
-                        )}
-                        {/* Show scheduled time if different from actual */}
-                        {day.schedule && (
-                          <div className="text-xs text-gray-500 mt-1 pt-1 border-t border-gray-200">
-                            {t('shiftSchedule.scheduled')}: {day.schedule.startTime} - {day.schedule.endTime}
-                          </div>
-                        )}
-                      </div>
-                    ) : day.schedule ? (
-                      <div>
-                        <div className="font-medium">
-                          {day.schedule.startTime} - {day.schedule.endTime}
-                        </div>
-                        {day.schedule.notes && (
-                          <div className="text-xs text-gray-500 mt-1">
-                            {day.schedule.notes}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="text-gray-400 text-sm">
-                        {t('shiftSchedule.noSchedule')}
-                      </div>
-                    )}
-                  </div>
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <div className="text-center">
+                <div className="font-semibold text-lg text-gray-900">
+                  {weekStart.toFormat('dd MMM')} - {weekEnd.toFormat('dd MMM yyyy')}
                 </div>
+                <button
+                  onClick={handleCurrentWeek}
+                  className="text-sm text-indigo-600 hover:text-indigo-800 mt-1 transition-colors"
+                >
+                  {t('shiftSchedule.currentWeek')}
+                </button>
               </div>
-            );
-          })}
-        </div>
-      </div>
+              <button
+                onClick={handleNextWeek}
+                className="p-2 rounded-md hover:bg-gray-100 transition-colors"
+                aria-label={t('common.next')}
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
 
-          {schedules.length === 0 && (
-            <div className="text-center py-8 text-gray-500">
-              {t('shiftSchedule.noSchedules')}
+          {/* Week Schedule */}
+          {schedules.length === 0 ? (
+            <div className="bg-white rounded-lg shadow-sm border p-12 text-center">
+              <div className="text-gray-400 mb-2">
+                <svg className="mx-auto h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <p className="text-gray-500 font-medium">{t('shiftSchedule.noSchedules')}</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
+              <div className="divide-y divide-gray-200">
+                {weekDays.map((day) => {
+                  const dayName = DAYS_OF_WEEK.find(d => d.value === day.dayOfWeek);
+                  const isToday = day.date.hasSame(DateTime.now().setZone('Asia/Jakarta'), 'day');
+                  const hasAttendance = !!day.attendance;
+                  const isCompleted = hasAttendance && day.attendance?.clockIn && day.attendance?.clockOut;
+                  const isPartial = hasAttendance && day.attendance?.clockIn && !day.attendance?.clockOut;
+                  const hasLeave = day.leaves.length > 0;
+                  
+                  // Determine background color based on schedule, attendance status, or leave
+                  let bgColor = '';
+                  const hasSchedule = !!day.schedule;
+                  if (hasLeave) {
+                    bgColor = 'bg-blue-50 border-l-4 border-blue-500';
+                  } else if (hasAttendance) {
+                    if (isCompleted) {
+                      bgColor = 'bg-green-50 border-l-4 border-green-500';
+                    } else if (isPartial) {
+                      bgColor = 'bg-yellow-50 border-l-4 border-yellow-500';
+                    } else {
+                      bgColor = 'bg-gray-50 border-l-4 border-gray-400';
+                    }
+                  } else if (hasSchedule) {
+                    bgColor = 'bg-indigo-50 border-l-4 border-indigo-400';
+                  } else if (isToday) {
+                    bgColor = 'bg-gray-50 border-l-4 border-indigo-200';
+                  }
+
+                  // Format clock in/out times
+                  const formatTime = (timeStr: string | null) => {
+                    if (!timeStr) return null;
+                    return DateTime.fromISO(timeStr).setZone('Asia/Jakarta').toFormat('HH:mm');
+                  };
+
+                  const clockInTime = formatTime(day.attendance?.clockIn || null);
+                  const clockOutTime = formatTime(day.attendance?.clockOut || null);
+                  
+                  return (
+                    <div
+                      key={day.date.toISODate()}
+                      className={`p-4 md:p-5 ${bgColor} transition-colors`}
+                    >
+                      <div className="flex flex-col md:flex-row md:justify-between md:items-start gap-3">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className={`font-semibold text-base ${isToday ? 'text-indigo-600' : 'text-gray-900'}`}>
+                              {dayName?.label}
+                            </div>
+                            {isToday && (
+                              <span className="px-2 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">
+                                {t('common.today')}
+                              </span>
+                            )}
+                            {hasLeave && (
+                              <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
+                                🏖️ {t('manager.onLeave')}
+                              </span>
+                            )}
+                            {hasAttendance && !hasLeave && (
+                              <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                                isCompleted 
+                                  ? 'bg-green-100 text-green-800' 
+                                  : isPartial 
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-gray-100 text-gray-800'
+                              }`}>
+                                {isCompleted ? '✓' : isPartial ? '⏱' : '○'}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-sm text-gray-600 mt-1.5">
+                            {day.date.toFormat('dd MMM yyyy')}
+                          </div>
+                        </div>
+                        <div className="text-left md:text-right min-w-[200px]">
+                          {hasLeave ? (
+                            <div className="space-y-2">
+                              {day.leaves.map((leave) => (
+                                <div key={leave.id} className="text-sm">
+                                  <div className="font-medium text-blue-700">
+                                    🏖️ {getLeaveTypeName(leave.leaveType)}
+                                  </div>
+                                  {leave.reason && (
+                                    <div className="text-xs text-gray-600 mt-1">
+                                      {leave.reason}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : hasAttendance ? (
+                            <div className="space-y-1.5">
+                              {clockInTime && (
+                                <div className="text-sm">
+                                  <span className="text-gray-600">{t('attendance.clockIn')}: </span>
+                                  <span className="font-semibold text-green-700">{clockInTime}</span>
+                                </div>
+                              )}
+                              {clockOutTime && (
+                                <div className="text-sm">
+                                  <span className="text-gray-600">{t('attendance.clockOut')}: </span>
+                                  <span className="font-semibold text-red-700">{clockOutTime}</span>
+                                </div>
+                              )}
+                              {!clockOutTime && clockInTime && (
+                                <div className="text-xs text-yellow-600 italic font-medium">
+                                  {t('attendance.clockedIn')}
+                                </div>
+                              )}
+                              {day.schedule && (
+                                <div className="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">
+                                  <span className="font-medium">{t('shiftSchedule.scheduled')}:</span> {day.schedule.startTime} - {day.schedule.endTime}
+                                </div>
+                              )}
+                            </div>
+                          ) : day.schedule ? (
+                            <div>
+                              <div className="font-semibold text-gray-900 text-base">
+                                {day.schedule.startTime} - {day.schedule.endTime}
+                              </div>
+                              {day.schedule.notes && (
+                                <div className="text-xs text-gray-500 mt-1.5">
+                                  {day.schedule.notes}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-gray-400 text-sm italic">
+                              {t('shiftSchedule.noSchedule')}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </>

@@ -6,8 +6,9 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { PolicyService } from '../policy/policy.service';
 import { DateTime } from 'luxon';
-import { ApprovalStatus, Role } from '../types/enums';
+import { ApprovalStatus, Role, PolicyType } from '../types/enums';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { Decimal } from 'decimal.js';
@@ -20,6 +21,7 @@ export class LeaveService {
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
+    private policyService: PolicyService,
   ) {}
 
   async getLeaveTypes(companyId: string, includeInactive = false) {
@@ -98,6 +100,16 @@ export class LeaveService {
       throw new NotFoundException('Leave type not found');
     }
 
+    // Get leave policy to check accrual method
+    let accrualMethod: string | null = null;
+    try {
+      const leavePolicy = await this.policyService.findByType(leaveType.companyId, PolicyType.LEAVE_POLICY);
+      accrualMethod = leavePolicy.config?.accrualMethod || null;
+    } catch (error) {
+      // Policy might not exist, use default behavior (normal accrual)
+      // This is expected if policy hasn't been set up yet
+    }
+
     // Get existing balance for current period
     let balance = await this.prisma.leaveBalance.findUnique({
       where: {
@@ -145,20 +157,46 @@ export class LeaveService {
     // Preserve the used amount from existing balance if it exists
     const usedAmount = balance ? new Decimal(balance.used) : new Decimal(0);
 
-    // Always recalculate balance based on current leave type settings
-    // This ensures balances reflect owner's quota changes
-    // Use previous month's balance (or null) to recalculate accrual for current month
-    const accrualResult = calculateLeaveAccrual(
-      leaveType,
-      previousBalance, // Use previous month's balance to recalculate accrual
-      currentYear,
-      currentMonth,
-      previousYearBalance, // For carryover calculation in January
-    );
+    // Check if accrual method is "NONE" - if so, use simple maxBalance - used calculation
+    const isAccrualDisabled = accrualMethod && typeof accrualMethod === 'string' && accrualMethod.toUpperCase() === 'NONE';
+    
+    let finalBalance: Decimal;
+    let accrualResult: any;
 
-    // Calculate final balance: accrued balance minus used
-    // The accrualResult.balance is the total accrued amount (before subtracting used)
-    const finalBalance = accrualResult.balance.sub(usedAmount);
+    if (isAccrualDisabled) {
+      // Simple calculation: maxBalance - used (no accrual, no carryover, no expiry)
+      if (leaveType.maxBalance) {
+        finalBalance = new Decimal(leaveType.maxBalance).sub(usedAmount);
+      } else {
+        // No max balance limit, return a large number or unlimited
+        finalBalance = new Decimal(999).sub(usedAmount); // Use 999 as "unlimited" representation
+      }
+      accrualResult = {
+        balance: finalBalance.add(usedAmount), // Total available before subtracting used
+        accrued: new Decimal(0),
+        used: usedAmount,
+        carriedOver: new Decimal(0),
+        expired: new Decimal(0),
+        periodYear: currentYear,
+        periodMonth: currentMonth,
+      };
+    } else {
+      // Use normal accrual calculation
+      // Always recalculate balance based on current leave type settings
+      // This ensures balances reflect owner's quota changes
+      // Use previous month's balance (or null) to recalculate accrual for current month
+      accrualResult = calculateLeaveAccrual(
+        leaveType,
+        previousBalance, // Use previous month's balance to recalculate accrual
+        currentYear,
+        currentMonth,
+        previousYearBalance, // For carryover calculation in January
+      );
+
+      // Calculate final balance: total available balance minus current month's used
+      // The accrualResult.balance is the total available balance (after accrual, carryover, expiry, and maxBalance cap, but before current month's used)
+      finalBalance = accrualResult.balance.sub(usedAmount);
+    }
 
     if (balance) {
       // Update existing balance with recalculated values based on current settings

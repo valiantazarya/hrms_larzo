@@ -134,6 +134,7 @@ model Employee {
   nik          String? // Nomor Induk Kependudukan
   phone        String?
   address      String?
+  division     String? // Division/Department
   joinDate     DateTime       @db.Date
   status       String @default("ACTIVE") // ACTIVE, INACTIVE, TERMINATED, ON_LEAVE
   managerId    String?
@@ -223,6 +224,7 @@ model Attendance {
   clockOutLatitude    Decimal?         @db.Decimal(10, 8)
   clockOutLongitude   Decimal?         @db.Decimal(11, 8)
   workDuration        Int? // Minutes
+  lateMinutes         Int? // Minutes late (clock in or clock out beyond grace period)
   status              String @default("PRESENT") // PRESENT, ABSENT, LATE, HALF_DAY, ON_LEAVE
   adjustmentRequestId String?
   notes               String?

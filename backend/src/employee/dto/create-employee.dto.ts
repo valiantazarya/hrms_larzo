@@ -42,6 +42,10 @@ export class CreateEmployeeDto {
   @IsString()
   address?: string;
 
+  @IsOptional()
+  @IsString()
+  division?: string;
+
   @IsDateString()
   joinDate: string;
 

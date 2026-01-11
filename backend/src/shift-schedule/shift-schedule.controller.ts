@@ -48,10 +48,15 @@ export class ShiftScheduleController {
       }
     }
     
-    // Stock Managers can only create schedules for themselves
+    // Stock Managers can create schedules for all employees except managers and owners
     if (user.role === Role.STOCK_MANAGER) {
-      if (createDto.employeeId !== user.employee?.id) {
-        throw new ForbiddenException('Can only create schedules for yourself');
+      const employee = await this.prisma.employee.findUnique({
+        where: { id: createDto.employeeId },
+        include: { user: true },
+      });
+      
+      if (!employee || employee.user?.role === Role.MANAGER || employee.user?.role === Role.OWNER) {
+        throw new ForbiddenException('Can only create schedules for employees, supervisors, and stock managers (not managers or owners)');
       }
     }
     
@@ -75,11 +80,6 @@ export class ShiftScheduleController {
       employeeId = user.employee?.id;
     }
     
-    // Stock Managers can only see their own schedules (they don't have direct reports)
-    if (user.role === Role.STOCK_MANAGER) {
-      employeeId = user.employee?.id;
-    }
-    
     // Managers can see their own and direct reports' schedules
     if (user.role === Role.MANAGER && employeeId) {
       const employee = await this.prisma.employee.findUnique({
@@ -91,6 +91,9 @@ export class ShiftScheduleController {
       }
     }
     
+    // Stock Managers can see schedules for all employees except managers and owners
+    // (filtering is handled in the service/frontend)
+    
     return this.shiftScheduleService.findAll(companyId, employeeId, weekStartDate, startDate, endDate);
   }
 
@@ -101,10 +104,33 @@ export class ShiftScheduleController {
     const companyId = user.employee?.companyId || '00000000-0000-0000-0000-000000000001';
     const schedule = await this.shiftScheduleService.findOne(id, companyId);
     
-    // Employees, Supervisors, and Stock Managers can only see their own schedules
-    if ((user.role === Role.EMPLOYEE || user.role === Role.SUPERVISOR || user.role === Role.STOCK_MANAGER) 
+    // Employees and Supervisors can only see their own schedules
+    if ((user.role === Role.EMPLOYEE || user.role === Role.SUPERVISOR) 
         && schedule.employeeId !== user.employee?.id) {
       throw new ForbiddenException('Access denied');
+    }
+    
+    // Managers can see their own and direct reports' schedules
+    if (user.role === Role.MANAGER && schedule.employeeId !== user.employee?.id) {
+      const employee = await this.prisma.employee.findUnique({
+        where: { id: schedule.employeeId },
+      });
+      
+      if (!employee || employee.managerId !== user.employee?.id) {
+        throw new ForbiddenException('Can only view schedules for yourself or direct reports');
+      }
+    }
+    
+    // Stock Managers can see schedules for all employees except managers and owners
+    if (user.role === Role.STOCK_MANAGER) {
+      const employee = await this.prisma.employee.findUnique({
+        where: { id: schedule.employeeId },
+        include: { user: true },
+      });
+      
+      if (employee && (employee.user?.role === Role.MANAGER || employee.user?.role === Role.OWNER)) {
+        throw new ForbiddenException('Can only view schedules for employees, supervisors, and stock managers (not managers or owners)');
+      }
     }
     
     return schedule;
@@ -132,9 +158,16 @@ export class ShiftScheduleController {
       }
     }
     
-    // Stock Managers can only update their own schedules
-    if (user.role === Role.STOCK_MANAGER && schedule.employeeId !== user.employee?.id) {
-      throw new ForbiddenException('Can only update your own schedules');
+    // Stock Managers can update schedules for all employees except managers and owners
+    if (user.role === Role.STOCK_MANAGER) {
+      const employee = await this.prisma.employee.findUnique({
+        where: { id: schedule.employeeId },
+        include: { user: true },
+      });
+      
+      if (employee && (employee.user?.role === Role.MANAGER || employee.user?.role === Role.OWNER)) {
+        throw new ForbiddenException('Can only update schedules for employees, supervisors, and stock managers (not managers or owners)');
+      }
     }
     
     return this.shiftScheduleService.update(id, companyId, user.id, updateDto);
@@ -158,9 +191,16 @@ export class ShiftScheduleController {
       }
     }
     
-    // Stock Managers can only delete their own schedules
-    if (user.role === Role.STOCK_MANAGER && schedule.employeeId !== user.employee?.id) {
-      throw new ForbiddenException('Can only delete your own schedules');
+    // Stock Managers can delete schedules for all employees except managers and owners
+    if (user.role === Role.STOCK_MANAGER) {
+      const employee = await this.prisma.employee.findUnique({
+        where: { id: schedule.employeeId },
+        include: { user: true },
+      });
+      
+      if (employee && (employee.user?.role === Role.MANAGER || employee.user?.role === Role.OWNER)) {
+        throw new ForbiddenException('Can only delete schedules for employees, supervisors, and stock managers (not managers or owners)');
+      }
     }
     
     return this.shiftScheduleService.remove(id, companyId);

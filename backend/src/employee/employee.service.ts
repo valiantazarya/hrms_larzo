@@ -21,7 +21,7 @@ export class EmployeeService {
   ) {}
 
   async findAll(user: any, companyId: string) {
-    // Owner: see all, Manager: see direct reports, Employee: see self
+    // Owner: see all, Manager: see direct reports, Stock Manager: see all except managers and owners, Employee: see self
     if (user.role === Role.OWNER) {
       return this.prisma.employee.findMany({
         where: { companyId },
@@ -50,6 +50,36 @@ export class EmployeeService {
             select: { id: true, email: true, role: true, isActive: true },
           },
           employment: true,
+        },
+        orderBy: { employeeCode: 'asc' },
+      });
+    }
+
+    if (user.role === Role.STOCK_MANAGER) {
+      // Stock Manager: see all employees except managers and owners
+      // Include employees that either don't have a user OR have a user with role not MANAGER/OWNER
+      return this.prisma.employee.findMany({
+        where: {
+          companyId,
+          OR: [
+            { userId: null },
+            {
+              user: {
+                role: {
+                  notIn: [Role.MANAGER, Role.OWNER],
+                },
+              },
+            },
+          ],
+        },
+        include: {
+          user: {
+            select: { id: true, email: true, role: true, isActive: true },
+          },
+          employment: true,
+          manager: {
+            select: { id: true, firstName: true, lastName: true },
+          },
         },
         orderBy: { employeeCode: 'asc' },
       });
@@ -151,12 +181,14 @@ export class EmployeeService {
     });
 
     // If role is MANAGER, clear managerId (managers can't have managers)
+    // Stock managers can have managers
     const managerId = createEmployeeDto.role === Role.MANAGER ? null : createEmployeeDto.managerId;
 
     // Create employee
     const employee = await this.prisma.employee.create({
       data: {
         userId: user.id,
+        division: createEmployeeDto.division,
         companyId,
         employeeCode: createEmployeeDto.employeeCode,
         firstName: createEmployeeDto.firstName,
@@ -167,7 +199,7 @@ export class EmployeeService {
         joinDate: new Date(createEmployeeDto.joinDate),
         status: createEmployeeDto.status || EmployeeStatus.ACTIVE,
         managerId,
-      },
+      } as any,
       include: {
         user: {
           select: { id: true, email: true, role: true },
@@ -211,6 +243,9 @@ export class EmployeeService {
       nik: employee.nik,
       phone: employee.phone,
       address: employee.address,
+      division: (employee as any).division,
+      employeeCode: employee.employeeCode,
+      joinDate: employee.joinDate,
       status: employee.status,
       role: employee.user?.role,
       email: employee.user?.email,
@@ -228,11 +263,8 @@ export class EmployeeService {
       }
     }
 
-    // Allow OWNER to update their own information including email
-    // Owner can update any employee, but email changes are only allowed for own profile
-    if (user.role === Role.OWNER && updateEmployeeDto.email && employee.id !== user.employee?.id) {
-      throw new ForbiddenException('Can only change your own email');
-    }
+    // Owner can update any employee data including email, employeeCode, and joinDate
+    // No restrictions for owner when updating other employees
 
     // Only owner can change role
     if (updateEmployeeDto.role && user.role !== Role.OWNER) {
@@ -244,8 +276,34 @@ export class EmployeeService {
       throw new BadRequestException('Cannot change owner role');
     }
 
-    // Extract role and email from DTO if present
-    const { role, email, ...employeeData } = updateEmployeeDto;
+    // Extract role, email, employeeCode, and joinDate from DTO if present
+    const { role, email, employeeCode, joinDate, ...employeeData } = updateEmployeeDto;
+
+    // Only owner can update employeeCode and joinDate
+    if ((employeeCode !== undefined || joinDate !== undefined) && user.role !== Role.OWNER) {
+      throw new ForbiddenException('Only owner can update employee code and join date');
+    }
+
+    // Validate employeeCode if being changed (must be unique within company)
+    if (employeeCode !== undefined) {
+      const existingEmployee = await this.prisma.employee.findFirst({
+        where: {
+          companyId: employee.companyId,
+          employeeCode,
+          id: { not: id },
+        },
+      });
+
+      if (existingEmployee) {
+        throw new BadRequestException('Employee code already exists in this company');
+      }
+      (employeeData as any).employeeCode = employeeCode;
+    }
+
+    // Handle joinDate if being changed
+    if (joinDate !== undefined) {
+      (employeeData as any).joinDate = new Date(joinDate);
+    }
 
     // Validate email if being changed
     if (email && employee.userId) {
@@ -262,6 +320,7 @@ export class EmployeeService {
     }
 
     // If role is being changed to MANAGER, clear managerId (managers can't have managers)
+    // Stock managers can have managers, so we don't clear it for them
     if (role === Role.MANAGER) {
       employeeData.managerId = null;
     }
@@ -322,6 +381,9 @@ export class EmployeeService {
         nik: finalEmployee.nik,
         phone: finalEmployee.phone,
         address: finalEmployee.address,
+        division: (finalEmployee as any).division,
+        employeeCode: finalEmployee.employeeCode,
+        joinDate: finalEmployee.joinDate,
         status: finalEmployee.status,
         role: finalEmployee.user?.role,
         email: finalEmployee.user?.email,

@@ -5,6 +5,7 @@ import {
   IsUUID,
   IsDateString,
   IsEmail,
+  ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { EmployeeStatus, Role } from '../../types/enums';
@@ -31,6 +32,18 @@ export class UpdateEmployeeDto {
   address?: string;
 
   @IsOptional()
+  @IsString()
+  division?: string;
+
+  @IsOptional()
+  @IsString()
+  employeeCode?: string;
+
+  @IsOptional()
+  @IsDateString()
+  joinDate?: string;
+
+  @IsOptional()
   @IsEmail()
   email?: string;
 
@@ -39,9 +52,13 @@ export class UpdateEmployeeDto {
   status?: EmployeeStatus;
 
   @IsOptional()
+  @Transform(({ value }) => {
+    if (value === '' || value === null) return null;
+    return value;
+  })
+  @ValidateIf((o) => o.managerId !== null)
   @IsUUID()
-  @Transform(({ value }) => (value === '' ? undefined : value))
-  managerId?: string;
+  managerId?: string | null;
 
   @IsOptional()
   @IsEnum(Role)

@@ -3,11 +3,23 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { useToast } from '../../hooks/useToast';
 import { reportingService, AttendanceSummary, LeaveUsage, OvertimeCost, PayrollTotals } from '../../services/api/reportingService';
+import { employeeService } from '../../services/api/employeeService';
+import { Employee } from '../../types';
 import { ToastContainer } from '../../components/common/Toast';
 import { Pagination } from '../../components/common/Pagination';
 
 export default function ReportingPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  
+  // Helper function to get translated leave type name
+  const getLeaveTypeName = (leaveType?: { name?: string; nameId?: string }): string => {
+    if (!leaveType) return 'N/A';
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && leaveType.nameId) {
+      return leaveType.nameId;
+    }
+    return leaveType.name || 'N/A';
+  };
   const toast = useToast();
   const [activeTab, setActiveTab] = useState<'attendance' | 'leave' | 'overtime' | 'payroll'>('attendance');
   const [startDate, setStartDate] = useState(
@@ -16,6 +28,7 @@ export default function ReportingPage() {
   const [endDate, setEndDate] = useState(
     new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0]
   );
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('');
 
   // Pagination states for each table
   const [attendancePage, setAttendancePage] = useState(1);
@@ -23,21 +36,34 @@ export default function ReportingPage() {
   const [overtimePage, setOvertimePage] = useState(1);
   const itemsPerPage = 10;
 
+  // Reset pagination when filters change
+  useEffect(() => {
+    setAttendancePage(1);
+    setLeavePage(1);
+    setOvertimePage(1);
+  }, [startDate, endDate, selectedEmployeeId]);
+
+  // Fetch employees for filter dropdown
+  const { data: employees = [] } = useQuery<Employee[]>({
+    queryKey: ['employees'],
+    queryFn: () => employeeService.getAll(),
+  });
+
   const { data: attendanceSummary, error: attendanceError } = useQuery<AttendanceSummary>({
-    queryKey: ['attendanceSummary', startDate, endDate],
-    queryFn: () => reportingService.getAttendanceSummary(startDate, endDate),
+    queryKey: ['attendanceSummary', startDate, endDate, selectedEmployeeId],
+    queryFn: () => reportingService.getAttendanceSummary(startDate, endDate, selectedEmployeeId || undefined),
     enabled: activeTab === 'attendance',
   });
 
   const { data: leaveUsage, error: leaveError } = useQuery<LeaveUsage>({
-    queryKey: ['leaveUsage', startDate, endDate],
-    queryFn: () => reportingService.getLeaveUsage(startDate, endDate),
+    queryKey: ['leaveUsage', startDate, endDate, selectedEmployeeId],
+    queryFn: () => reportingService.getLeaveUsage(startDate, endDate, selectedEmployeeId || undefined),
     enabled: activeTab === 'leave',
   });
 
   const { data: overtimeCost, error: overtimeError } = useQuery<OvertimeCost>({
-    queryKey: ['overtimeCost', startDate, endDate],
-    queryFn: () => reportingService.getOvertimeCost(startDate, endDate),
+    queryKey: ['overtimeCost', startDate, endDate, selectedEmployeeId],
+    queryFn: () => reportingService.getOvertimeCost(startDate, endDate, selectedEmployeeId || undefined),
     enabled: activeTab === 'overtime',
   });
 
@@ -79,9 +105,9 @@ export default function ReportingPage() {
     <div className="p-6">
       <h2 className="text-2xl font-bold mb-6">{t('reporting.title')}</h2>
 
-      {/* Date Range Selector */}
+      {/* Filters */}
       <div className="bg-white p-4 rounded-lg shadow-sm border mb-6">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">{t('reporting.startDate')}</label>
             <input
@@ -99,6 +125,28 @@ export default function ReportingPage() {
               onChange={(e) => setEndDate(e.target.value)}
               className="w-full p-2 border rounded-md"
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">{t('reporting.employee')}</label>
+            <select
+              value={selectedEmployeeId}
+              onChange={(e) => setSelectedEmployeeId(e.target.value)}
+              className="w-full p-2 border rounded-md"
+            >
+              <option value="">{t('reporting.allEmployees')}</option>
+              {employees
+                .filter(emp => emp.status === 'ACTIVE')
+                .sort((a, b) => {
+                  const nameA = `${a.firstName} ${a.lastName}`.toLowerCase();
+                  const nameB = `${b.firstName} ${b.lastName}`.toLowerCase();
+                  return nameA.localeCompare(nameB);
+                })
+                .map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.firstName} {emp.lastName} ({emp.employeeCode})
+                  </option>
+                ))}
+            </select>
           </div>
         </div>
       </div>
@@ -153,7 +201,7 @@ export default function ReportingPage() {
           {/* Summary Cards */}
           <div className="bg-white p-6 rounded-lg shadow-sm border">
             <h3 className="text-lg font-semibold mb-4">{t('reporting.attendanceSummary')}</h3>
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+            <div className="grid grid-cols-2 md:grid-cols-7 gap-4 mb-6">
               <div className="bg-blue-50 p-4 rounded">
                 <div className="text-sm text-gray-600">{t('reporting.totalDays')}</div>
                 <div className="text-2xl font-bold">{attendanceSummary.totalDays}</div>
@@ -178,8 +226,51 @@ export default function ReportingPage() {
                 <div className="text-sm text-gray-600">{t('reporting.totalHours')}</div>
                 <div className="text-2xl font-bold">{attendanceSummary.totalHours.toFixed(1)}</div>
               </div>
+              <div className="bg-pink-50 p-4 rounded">
+                <div className="text-sm text-gray-600">{t('reporting.totalLateTime')}</div>
+                <div className="text-2xl font-bold">
+                  {attendanceSummary.totalLateMinutes 
+                    ? `${Math.floor(attendanceSummary.totalLateMinutes / 60)}h ${attendanceSummary.totalLateMinutes % 60}m`
+                    : '0h 0m'}
+                </div>
+              </div>
             </div>
           </div>
+
+          {/* Late Accumulation by Employee */}
+          {attendanceSummary.lateByEmployee && attendanceSummary.lateByEmployee.length > 0 && (
+            <div className="bg-white p-6 rounded-lg shadow-sm border">
+              <h3 className="text-lg font-semibold mb-4">{t('reporting.lateAccumulation')}</h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('reporting.employee')}</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('reporting.lateCount')}</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('reporting.totalLateTime')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {attendanceSummary.lateByEmployee
+                      .sort((a, b) => b.totalLateMinutes - a.totalLateMinutes)
+                      .map((emp: any) => (
+                        <tr key={emp.employee.id}>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            {emp.employee.firstName} {emp.employee.lastName}
+                            <div className="text-xs text-gray-500">{emp.employee.employeeCode}</div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">{emp.lateCount}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            {Math.floor(emp.totalLateMinutes / 60)}h {emp.totalLateMinutes % 60}m
+                            <div className="text-xs text-gray-500">({emp.totalLateHours.toFixed(2)} hours)</div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Employee Breakdown */}
           {attendanceSummary.attendances && attendanceSummary.attendances.length > 0 && (
@@ -210,14 +301,16 @@ export default function ReportingPage() {
                             onLeave: 0,
                             totalHours: 0,
                             totalDays: 0,
+                            totalLateMinutes: 0,
                           };
                         }
                         acc[empId].totalDays += 1;
                         if (att.status === 'PRESENT') acc[empId].present += 1;
                         if (att.status === 'ABSENT') acc[empId].absent += 1;
-                        if (att.status === 'LATE') acc[empId].late += 1;
+                        if (att.status === 'LATE' || (att.lateMinutes && att.lateMinutes > 0)) acc[empId].late += 1;
                         if (att.status === 'ON_LEAVE') acc[empId].onLeave += 1;
                         acc[empId].totalHours += (att.workDuration || 0) / 60;
+                        acc[empId].totalLateMinutes += (att.lateMinutes || 0);
                         return acc;
                       }, {})
                     ).map(([empId, data]: [string, any]) => {
@@ -232,7 +325,14 @@ export default function ReportingPage() {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm">{data.present}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm">{data.absent}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">{data.late}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            {data.late}
+                            {data.totalLateMinutes > 0 && (
+                              <div className="text-xs text-orange-600">
+                                ({Math.floor(data.totalLateMinutes / 60)}h {data.totalLateMinutes % 60}m)
+                              </div>
+                            )}
+                          </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm">{data.totalHours.toFixed(1)}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">{attendanceRate}%</td>
                         </tr>
@@ -265,6 +365,7 @@ export default function ReportingPage() {
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('reporting.clockIn')}</th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('reporting.clockOut')}</th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('reporting.workDuration')}</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('reporting.lateTime')}</th>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
@@ -294,6 +395,15 @@ export default function ReportingPage() {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm">
                               {att.workDuration ? `${(att.workDuration / 60).toFixed(1)}h` : '-'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm">
+                              {att.lateMinutes && att.lateMinutes > 0 ? (
+                                <span className="text-orange-600 font-medium">
+                                  {Math.floor(att.lateMinutes / 60)}h {att.lateMinutes % 60}m
+                                </span>
+                              ) : (
+                                '-'
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -362,7 +472,7 @@ export default function ReportingPage() {
                         if (!acc[key]) {
                           acc[key] = {
                             employee: lr.employee,
-                            leaveType: lr.leaveType.name,
+                            leaveType: getLeaveTypeName(lr.leaveType),
                             count: 0,
                             days: 0,
                           };
@@ -417,7 +527,7 @@ export default function ReportingPage() {
                             <td className="px-6 py-4 whitespace-nowrap text-sm">
                               {lr.employee.firstName} {lr.employee.lastName}
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">{lr.leaveType.name}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm">{getLeaveTypeName(lr.leaveType)}</td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm">
                               {new Date(lr.startDate).toLocaleDateString('id-ID')}
                             </td>

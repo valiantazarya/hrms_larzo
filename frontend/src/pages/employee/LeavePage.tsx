@@ -4,12 +4,14 @@ import { useTranslation } from 'react-i18next';
 import { DateTime } from 'luxon';
 import { useToast } from '../../hooks/useToast';
 import { leaveService, LeaveRequest, LeaveType, LeaveBalance } from '../../services/api/leaveService';
+import { policyService, Policy } from '../../services/api/policyService';
 import { Button } from '../../components/common/Button';
 import { ToastContainer } from '../../components/common/Toast';
 import { Pagination } from '../../components/common/Pagination';
+import { Modal } from '../../components/common/Modal';
 
 export default function LeavePage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [showRequestForm, setShowRequestForm] = useState(false);
@@ -21,6 +23,38 @@ export default function LeavePage() {
   const [reason, setReason] = useState('');
   const [leavePage, setLeavePage] = useState(1);
   const itemsPerPage = 10;
+
+  // Fetch leave policy
+  const { data: leavePolicy } = useQuery<Policy | null, Error>({
+    queryKey: ['leavePolicy'],
+    queryFn: async (): Promise<Policy | null> => {
+      try {
+        return await policyService.getByType('LEAVE_POLICY');
+      } catch (error: any) {
+        // Policy might not exist yet, return null instead of throwing
+        if (error.response?.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    retry: false, // Don't retry if policy doesn't exist
+  });
+
+  // Extract policy settings
+  const policyConfig = leavePolicy?.config || {};
+  const accrualMethod = policyConfig.accrualMethod || null;
+  // Check if accrual is enabled (case-insensitive check for "NONE")
+  const hasAccrual = accrualMethod && typeof accrualMethod === 'string' && accrualMethod.toUpperCase() !== 'NONE';
+
+  // Helper function to get translated leave type name
+  const getLeaveTypeName = (type: LeaveType): string => {
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && type.nameId) {
+      return type.nameId;
+    }
+    return type.name;
+  };
 
   // Fetch leave types
   const { data: leaveTypes = [], error: leaveTypesError } = useQuery<LeaveType[]>({
@@ -74,6 +108,9 @@ export default function LeavePage() {
       toast.showToast(errorMessage, 'error', 5000);
     }
   }, [balancesError, toast, t]);
+
+  // Handle policy error (non-critical, policy might not be set up yet)
+  // No need to show error toast as this is expected if policy hasn't been configured
 
   // Create a map of leaveTypeId -> balance for easy lookup
   const balanceMap = new Map(balances.map((b) => [b.leaveTypeId, b]));
@@ -217,14 +254,9 @@ export default function LeavePage() {
         return;
       }
 
-      // Calculate available balance: if maxBalance is set, use maxBalance - used, otherwise use balance
-      const used = Number(currentBalance.used);
-      let availableBalance: number;
-      if (selectedType.maxBalance) {
-        availableBalance = selectedType.maxBalance - used;
-      } else {
-        availableBalance = Number(currentBalance.balance);
-      }
+      // The balance field already accounts for maxBalance, accrual, used, carryover, and expiry
+      // So we can use it directly as the available balance
+      const availableBalance = Number(currentBalance.balance);
 
       if (availableBalance < requestedDays) {
         toast.showToast(
@@ -323,15 +355,11 @@ export default function LeavePage() {
           const used = balance ? Number(balance.used) : 0;
           const maxBalance = type.maxBalance;
           
-          // Calculate days available: if maxBalance is set, show maxBalance - used, otherwise show balance
-          let daysAvailable: number;
-          if (maxBalance) {
-            daysAvailable = maxBalance - used;
-          } else {
-            daysAvailable = balance ? Number(balance.balance) : 0;
-          }
+          // The balance field already accounts for maxBalance, accrual, used, carryover, and expiry
+          // So we can use it directly as the available balance
+          const daysAvailable = balance ? Number(balance.balance) : 0;
           
-          const isAtMax = maxBalance && daysAvailable <= 0;
+          const isAtMax = daysAvailable <= 0;
           
           return (
             <div
@@ -346,7 +374,7 @@ export default function LeavePage() {
                 setShowRequestForm(true);
               }}
             >
-              <div className="text-sm text-gray-600">{type.name}</div>
+              <div className="text-sm text-gray-600">{getLeaveTypeName(type)}</div>
               <div className="text-2xl font-bold mt-1">
                 {daysAvailable >= 0 ? daysAvailable.toFixed(1) : '0.0'}
               </div>
@@ -356,6 +384,11 @@ export default function LeavePage() {
               {maxBalance && (
                 <div className="text-xs text-gray-400 mt-1">
                   {t('leave.maxBalance')}: {maxBalance} {t('leave.days')} | {t('leave.used')}: {used.toFixed(1)} {t('leave.days')}
+                  {hasAccrual && balance && (
+                    <span className="ml-2">
+                      | {t('leave.accrued')}: {Number(balance.accrued).toFixed(1)} {t('leave.days')}
+                    </span>
+                  )}
                 </div>
               )}
               {isAtMax && (
@@ -369,12 +402,21 @@ export default function LeavePage() {
       </div>
 
       {/* Request Form */}
-      {showRequestForm && (
-        <div className="bg-white p-4 rounded-lg shadow-sm border">
-          <h3 className="font-semibold mb-4">
-            {editingRequestId ? t('leave.editRequest') : t('leave.newRequest')}
-          </h3>
-          <form onSubmit={handleSubmit} className="space-y-4">
+      {/* Request Form Modal */}
+      <Modal
+        isOpen={showRequestForm}
+        onClose={() => {
+          setShowRequestForm(false);
+          setEditingRequestId(null);
+          setSelectedLeaveType('');
+          setStartDate('');
+          setEndDate('');
+          setReason('');
+        }}
+        title={editingRequestId ? t('leave.editRequest') : t('leave.newRequest')}
+        size="md"
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">
                 {t('leave.leaveType')}
@@ -388,7 +430,7 @@ export default function LeavePage() {
                 <option value="">{t('common.select')}</option>
                 {leaveTypes.map((type) => (
                   <option key={type.id} value={type.id}>
-                    {type.name}
+                    {getLeaveTypeName(type)}
                   </option>
                 ))}
               </select>
@@ -396,20 +438,15 @@ export default function LeavePage() {
 
             {selectedBalance && (() => {
               const selectedType = leaveTypes.find((type) => type.id === selectedLeaveType);
-              const used = Number(selectedBalance.used);
-              let availableBalance: number;
-              if (selectedType?.maxBalance) {
-                availableBalance = selectedType.maxBalance - used;
-              } else {
-                availableBalance = Number(selectedBalance.balance);
-              }
+              // The balance field already accounts for maxBalance, accrual, used, carryover, and expiry
+              const availableBalance = Number(selectedBalance.balance);
               
               return (
                 <div className="bg-blue-50 p-2 rounded text-sm">
                   {t('leave.availableBalance')}: {availableBalance.toFixed(1)} {t('leave.days')}
                   {selectedType?.maxBalance && (
                     <span className="text-gray-600 ml-2">
-                      ({t('leave.maxBalance')}: {selectedType.maxBalance} - {t('leave.used')}: {used.toFixed(1)})
+                      ({t('leave.maxBalance')}: {selectedType.maxBalance} | {t('leave.used')}: {Number(selectedBalance.used).toFixed(1)})
                     </span>
                   )}
                 </div>
@@ -423,16 +460,8 @@ export default function LeavePage() {
                 const selectedType = leaveTypes.find((type) => type.id === selectedLeaveType);
                 const currentBalance = balanceMap.get(selectedLeaveType);
                 
-                // Calculate available balance: if maxBalance is set, use maxBalance - used, otherwise use balance
-                let availableBalance = 0;
-                if (currentBalance) {
-                  const used = Number(currentBalance.used);
-                  if (selectedType?.maxBalance) {
-                    availableBalance = selectedType.maxBalance - used;
-                  } else {
-                    availableBalance = Number(currentBalance.balance);
-                  }
-                }
+                // The balance field already accounts for maxBalance, accrual, used, carryover, and expiry
+                const availableBalance = currentBalance ? Number(currentBalance.balance) : 0;
                 
                 const isInsufficient = selectedType?.isPaid && availableBalance < requestedDays;
                 
@@ -521,14 +550,8 @@ export default function LeavePage() {
                       const currentBalance = balanceMap.get(selectedLeaveType);
                       if (!currentBalance) return true;
                       
-                      // Calculate available balance: if maxBalance is set, use maxBalance - used, otherwise use balance
-                      const used = Number(currentBalance.used);
-                      let availableBalance: number;
-                      if (selectedType.maxBalance) {
-                        availableBalance = selectedType.maxBalance - used;
-                      } else {
-                        availableBalance = Number(currentBalance.balance);
-                      }
+                      // The balance field already accounts for maxBalance, accrual, used, carryover, and expiry
+                      const availableBalance = Number(currentBalance.balance);
                       
                       return availableBalance < requestedDays;
                     }
@@ -561,8 +584,7 @@ export default function LeavePage() {
               </Button>
             </div>
           </form>
-        </div>
-      )}
+      </Modal>
 
       {/* Request List */}
       <div className="space-y-3">
@@ -588,7 +610,7 @@ export default function LeavePage() {
                     <div className="flex justify-between items-start mb-2">
                       <div>
                         <div className="font-semibold">
-                          {request.leaveType?.name || 'N/A'}
+                          {request.leaveType ? getLeaveTypeName(request.leaveType) : 'N/A'}
                         </div>
                         <div className="text-sm text-gray-600">
                           {new Date(request.startDate).toLocaleDateString()} -{' '}
