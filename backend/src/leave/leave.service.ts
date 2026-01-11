@@ -298,11 +298,22 @@ export class LeaveService {
       }
     }
 
-    // Get all active employees in one query
+    // Get all active employees in one query, excluding OWNER and MANAGER roles
+    // Include employees that either don't have a user OR have a user with role not MANAGER/OWNER
     const employees = await this.prisma.employee.findMany({
       where: {
         companyId,
         status: 'ACTIVE',
+        OR: [
+          { userId: null },
+          {
+            user: {
+              role: {
+                notIn: ['OWNER', 'MANAGER'],
+              },
+            },
+          },
+        ],
       },
       select: {
         id: true,

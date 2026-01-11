@@ -2960,7 +2960,12 @@ function EmployeeLeaveQuotaManagement() {
     );
   }
 
-  const activeEmployees = employees.filter(e => e.status === 'ACTIVE');
+  // Filter out OWNER and MANAGER roles from employee leave quota management
+  const activeEmployees = employees.filter(e => 
+    e.status === 'ACTIVE' && 
+    e.user?.role !== 'OWNER' && 
+    e.user?.role !== 'MANAGER'
+  );
   const activeLeaveTypes = leaveTypes.filter(lt => lt.isActive);
 
   return (
