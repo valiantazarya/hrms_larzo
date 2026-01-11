@@ -297,7 +297,7 @@ function ApprovalInbox() {
                   <div>
                     <div className="font-semibold">{getEmployeeName(request.employeeId)}</div>
                     <div className="text-sm text-gray-600">
-                      {request.leaveType?.name || 'N/A'}
+                      {getLeaveTypeName(request.leaveType)}
                     </div>
                     <div className="text-sm text-gray-600">
                       {new Date(request.startDate).toLocaleDateString()} -{' '}

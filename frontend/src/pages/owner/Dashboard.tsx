@@ -2832,11 +2832,7 @@ function LeaveTypeManagement() {
   const policyConfig = leavePolicy?.config || {};
   const accrualMethod = policyConfig.accrualMethod || null;
   const hasAccrual = accrualMethod && accrualMethod !== 'NONE';
-  const maxBalance = policyConfig.maxBalance;
   const carryoverAllowed = policyConfig.carryoverAllowed ?? true;
-  const carryoverMax = policyConfig.carryoverMax;
-  const expiresAfterMonths = policyConfig.expiresAfterMonths;
-  const requiresApproval = policyConfig.requiresApproval ?? true;
 
   // Helper function to get translated leave type name
   const getLeaveTypeName = (type: LeaveType): string => {
