@@ -1144,8 +1144,8 @@ function calculateLeaveAccrual(
   
   // Handle carryover
   let carriedOver = 0;
-  if (leaveType.carryoverAllowed && periodMonth === 1) {
-    // January: carryover from previous year
+  if (leaveType.carryoverAllowed && periodMonth === 7) {
+    // July: carryover from previous year (June balance)
     const previousYearBalance = getPreviousYearBalance(employee.id, leaveType.id);
     const maxCarryover = leaveType.carryoverMax || 0;
     carriedOver = Math.min(previousYearBalance, maxCarryover);

@@ -135,8 +135,9 @@ export default function ShiftSchedulePage() {
   const schedules: ShiftSchedule[] = Array.isArray(schedulesData) ? schedulesData : [];
 
   // Fetch approved leave requests for all employees in the date range
+  // For STOCK_MANAGER, only fetch for employees they have access to (already filtered in employees array)
   const { data: allLeaveRequests = [] } = useQuery<LeaveRequest[]>({
-    queryKey: ['leaveRequests', 'all', startDate, endDate],
+    queryKey: ['leaveRequests', 'all', startDate, endDate, user?.role],
     queryFn: async () => {
       if (employees.length === 0) return [];
       const allLeaves: LeaveRequest[] = [];
@@ -553,9 +554,24 @@ export default function ShiftSchedulePage() {
                     ? weekSchedulesData 
                     : [];
                   
-                  // Fetch approved leaves for all employees in the week
+                  // Get employees to export (filtered by role - exclude OWNER and MANAGER)
+                  let employeesToExport = employees.filter(emp => 
+                    emp.status === 'ACTIVE' && 
+                    emp.user?.role !== 'OWNER' &&
+                    emp.user?.role !== 'MANAGER'
+                  );
+                  
+                  // Filter by role if needed
+                  let allSchedulesForExport = weekSchedules;
+                  if (user?.role === 'STOCK_MANAGER') {
+                    allSchedulesForExport = weekSchedules.filter(s => 
+                      employeesToExport.some(emp => emp.id === s.employeeId)
+                    );
+                  }
+                  
+                  // Fetch approved leaves only for employees to export (to avoid 403 errors)
                   const allWeekLeaves: LeaveRequest[] = [];
-                  for (const emp of employees) {
+                  for (const emp of employeesToExport) {
                     try {
                       const requests = await leaveService.getRequests(emp.id);
                       const approvedLeaves = requests.filter(req => {
@@ -566,7 +582,7 @@ export default function ShiftSchedulePage() {
                       });
                       allWeekLeaves.push(...approvedLeaves);
                     } catch (error) {
-                      // Skip if no access
+                      // Skip if no access (shouldn't happen since we filtered employees, but just in case)
                     }
                   }
                   
@@ -590,26 +606,6 @@ export default function ShiftSchedulePage() {
                       current = current.plus({ days: 1 });
                     }
                   });
-                  
-                  // Filter by role if needed
-                  let allSchedulesForExport = weekSchedules;
-                  if (user?.role === 'STOCK_MANAGER') {
-                    allSchedulesForExport = weekSchedules.filter(s => 
-                      employees.some(emp => emp.id === s.employeeId)
-                    );
-                  }
-                  
-                  // Get employees to export (filtered by role)
-                  let employeesToExport = employees;
-                  if (user?.role === 'STOCK_MANAGER') {
-                    employeesToExport = employees.filter(emp => 
-                      emp.status === 'ACTIVE' && 
-                      emp.user?.role !== 'OWNER' &&
-                      emp.user?.role !== 'MANAGER'
-                    );
-                  } else {
-                    employeesToExport = employees.filter(emp => emp.status === 'ACTIVE');
-                  }
                   
                   // Sort employees by name
                   employeesToExport.sort((a, b) => {

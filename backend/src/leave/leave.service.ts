@@ -100,11 +100,13 @@ export class LeaveService {
       throw new NotFoundException('Leave type not found');
     }
 
-    // Get leave policy to check accrual method
+    // Get leave policy to check accrual method and manual quota settings
     let accrualMethod: string | null = null;
+    let manualQuotaEnabled: boolean = false;
     try {
       const leavePolicy = await this.policyService.findByType(leaveType.companyId, PolicyType.LEAVE_POLICY);
       accrualMethod = leavePolicy.config?.accrualMethod || null;
+      manualQuotaEnabled = leavePolicy.config?.manualQuotaEnabled || false;
     } catch (error) {
       // Policy might not exist, use default behavior (normal accrual)
       // This is expected if policy hasn't been set up yet
@@ -135,27 +137,36 @@ export class LeaveService {
       },
     });
 
-    // For carryover calculation in January, get previous year's December balance
+    // For carryover calculation in July, get previous year's June balance
     let previousYearBalance: Decimal | undefined;
-    if (currentMonth === 1) {
+    if (currentMonth === 7) {
       const previousYear = currentYear - 1;
-      const previousYearDecBalance = await this.prisma.leaveBalance.findUnique({
+      const previousYearJuneBalance = await this.prisma.leaveBalance.findUnique({
         where: {
           employeeId_leaveTypeId_periodYear_periodMonth: {
             employeeId,
             leaveTypeId,
             periodYear: previousYear,
-            periodMonth: 12,
+            periodMonth: 6,
           },
         },
       });
-      previousYearBalance = previousYearDecBalance
-        ? new Decimal(previousYearDecBalance.balance)
+      previousYearBalance = previousYearJuneBalance
+        ? new Decimal(previousYearJuneBalance.balance)
         : undefined;
     }
 
     // Preserve the used amount from existing balance if it exists
     const usedAmount = balance ? new Decimal(balance.used) : new Decimal(0);
+
+    // Check if manual quota mode is enabled and balance exists
+    // If manual quota is enabled and balance exists, use it directly (don't recalculate)
+    if (manualQuotaEnabled && balance) {
+      // In manual quota mode, the balance stored is total available (balance + used)
+      // So we return it as-is - the balance field already represents available balance
+      // The used amount is already accounted for in how we store it
+      return balance; // Return existing balance without recalculation
+    }
 
     // Check if accrual method is "NONE" - if so, use simple maxBalance - used calculation
     const isAccrualDisabled = accrualMethod && typeof accrualMethod === 'string' && accrualMethod.toUpperCase() === 'NONE';
@@ -190,7 +201,7 @@ export class LeaveService {
         previousBalance, // Use previous month's balance to recalculate accrual
         currentYear,
         currentMonth,
-        previousYearBalance, // For carryover calculation in January
+        previousYearBalance, // For carryover calculation in July
       );
 
       // Calculate final balance: total available balance minus current month's used
@@ -397,6 +408,60 @@ export class LeaveService {
       });
 
       if (employee.managerId !== user.employee?.id) {
+        throw new ForbiddenException('Access denied');
+      }
+
+      const requests = await this.prisma.leaveRequest.findMany({
+        where: { employeeId },
+        include: {
+          leaveType: true,
+        },
+        orderBy: { requestedAt: 'desc' },
+      });
+
+      // Add approver information
+      return Promise.all(
+        requests.map(async (req) => {
+          if (req.approvedBy) {
+            const approver = await this.prisma.user.findUnique({
+              where: { id: req.approvedBy },
+              include: {
+                employee: {
+                  select: { id: true, firstName: true, lastName: true, employeeCode: true },
+                },
+              },
+            });
+            return {
+              ...req,
+              approver: approver
+                ? {
+                    id: approver.id,
+                    email: approver.email,
+                    role: approver.role,
+                    name: approver.employee
+                      ? `${approver.employee.firstName} ${approver.employee.lastName}`
+                      : approver.email,
+                  }
+                : null,
+            };
+          }
+          return { ...req, approver: null };
+        }),
+      );
+    }
+
+    if (user.role === Role.STOCK_MANAGER) {
+      const employee = await this.prisma.employee.findUnique({
+        where: { id: employeeId },
+        include: {
+          user: {
+            select: { role: true },
+          },
+        },
+      });
+
+      // Stock Manager can access leave requests for all employees except MANAGER and OWNER
+      if (employee.user?.role === Role.MANAGER || employee.user?.role === Role.OWNER) {
         throw new ForbiddenException('Access denied');
       }
 
@@ -796,6 +861,132 @@ export class LeaveService {
     return this.prisma.leaveRequest.delete({
       where: { id: requestId },
     });
+  }
+
+  async setManualQuota(
+    employeeId: string,
+    leaveTypeId: string,
+    balance: number,
+    userId: string,
+    companyId: string,
+  ) {
+    // Verify leave type belongs to company
+    const leaveType = await this.prisma.leaveType.findFirst({
+      where: {
+        id: leaveTypeId,
+        companyId,
+      },
+    });
+
+    if (!leaveType) {
+      throw new NotFoundException('Leave type not found');
+    }
+
+    // Verify employee belongs to company
+    const employee = await this.prisma.employee.findFirst({
+      where: {
+        id: employeeId,
+        companyId,
+      },
+    });
+
+    if (!employee) {
+      throw new NotFoundException('Employee not found');
+    }
+
+    // Check if manual quota is enabled in leave policy
+    let manualQuotaEnabled = false;
+    try {
+      const leavePolicy = await this.policyService.findByType(companyId, PolicyType.LEAVE_POLICY);
+      manualQuotaEnabled = leavePolicy.config?.manualQuotaEnabled || false;
+    } catch (error) {
+      // Policy might not exist
+    }
+
+    if (!manualQuotaEnabled) {
+      throw new BadRequestException('Manual quota adjustment is not enabled. Please enable it in Leave Policy settings first.');
+    }
+
+    const now = DateTime.now().setZone('Asia/Jakarta');
+    const currentYear = now.year;
+    const currentMonth = now.month;
+
+    // Get or create balance for current period
+    const existingBalance = await this.prisma.leaveBalance.findUnique({
+      where: {
+        employeeId_leaveTypeId_periodYear_periodMonth: {
+          employeeId,
+          leaveTypeId,
+          periodYear: currentYear,
+          periodMonth: currentMonth,
+        },
+      },
+    });
+
+    const balanceDecimal = new Decimal(balance);
+    const usedAmount = existingBalance ? new Decimal(existingBalance.used) : new Decimal(0);
+    
+    // The balance field stores available balance (after subtracting used)
+    // So we store the balance directly as the available amount
+    // The used amount is tracked separately
+
+    if (existingBalance) {
+      // Update existing balance
+      const updated = await this.prisma.leaveBalance.update({
+        where: {
+          employeeId_leaveTypeId_periodYear_periodMonth: {
+            employeeId,
+            leaveTypeId,
+            periodYear: currentYear,
+            periodMonth: currentMonth,
+          },
+        },
+        data: {
+          balance: balanceDecimal.toNumber(),
+          // Keep accrued, carriedOver, expired as 0 for manual quotas
+          accrued: 0,
+          carriedOver: 0,
+          expired: 0,
+        },
+      });
+
+      // Log audit event
+      await logAuditEvent(this.auditService, {
+        action: 'MANUAL_QUOTA_SET',
+        entityType: 'LeaveBalance',
+        entityId: updated.id,
+        actorId: userId,
+        after: { employeeId, leaveTypeId, balance: balanceDecimal.toNumber() },
+      });
+
+      return updated;
+    } else {
+      // Create new balance
+      const created = await this.prisma.leaveBalance.create({
+        data: {
+          employeeId,
+          leaveTypeId,
+          balance: balanceDecimal.toNumber(),
+          accrued: 0,
+          used: usedAmount.toNumber(),
+          carriedOver: 0,
+          expired: 0,
+          periodYear: currentYear,
+          periodMonth: currentMonth,
+        },
+      });
+
+      // Log audit event
+      await logAuditEvent(this.auditService, {
+        action: 'MANUAL_QUOTA_SET',
+        entityType: 'LeaveBalance',
+        entityId: created.id,
+        actorId: userId,
+        after: { employeeId, leaveTypeId, balance: balanceDecimal.toNumber() },
+      });
+
+      return created;
+    }
   }
 }
 

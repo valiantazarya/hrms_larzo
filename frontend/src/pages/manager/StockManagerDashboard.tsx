@@ -14,6 +14,7 @@ import ManagerPayslipsPage from './ManagerPayslipsPage';
 import ManagerShiftSchedulePage from './ManagerShiftSchedulePage';
 import ShiftSchedulePage from '../owner/ShiftSchedulePage';
 import ManagerAttendanceAdjustment from './ManagerAttendanceAdjustment';
+import LeavePage from '../employee/LeavePage';
 import { ChangePassword } from '../../components/common/ChangePassword';
 import { employeeService, Employee } from '../../services/api/employeeService';
 
@@ -390,19 +391,19 @@ export default function StockManagerDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   
   // Get initial view from URL or default to 'attendance'
-  const getInitialView = (): 'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'payslips' | 'profile' => {
+  const getInitialView = (): 'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'leave' | 'payslips' | 'profile' => {
     const tab = searchParams.get('tab');
-    const validViews = ['attendance', 'schedule', 'scheduleManagement', 'adjustment', 'payslips', 'profile'];
+    const validViews = ['attendance', 'schedule', 'scheduleManagement', 'adjustment', 'leave', 'payslips', 'profile'];
     return (tab && validViews.includes(tab)) ? tab as any : 'attendance';
   };
   
-  const [activeView, setActiveView] = useState<'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'payslips' | 'profile'>(getInitialView());
+  const [activeView, setActiveView] = useState<'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'leave' | 'payslips' | 'profile'>(getInitialView());
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const isInitialMount = useRef(true);
 
   // Update URL when activeView changes
-  const handleViewChange = (view: 'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'payslips' | 'profile') => {
+  const handleViewChange = (view: 'attendance' | 'schedule' | 'scheduleManagement' | 'adjustment' | 'leave' | 'payslips' | 'profile') => {
     setActiveView(view);
     setSearchParams({ tab: view }, { replace: true });
   };
@@ -410,7 +411,7 @@ export default function StockManagerDashboard() {
   // Sync with URL on mount and when URL changes (e.g., browser back/forward)
   useEffect(() => {
     const tab = searchParams.get('tab');
-    const validViews = ['attendance', 'schedule', 'scheduleManagement', 'adjustment', 'payslips', 'profile'];
+    const validViews = ['attendance', 'schedule', 'scheduleManagement', 'adjustment', 'leave', 'payslips', 'profile'];
     
     if (isInitialMount.current) {
       // On initial mount, ensure URL has a tab parameter
@@ -431,6 +432,7 @@ export default function StockManagerDashboard() {
   const primaryNavItems = [
     { key: 'attendance', label: t('nav.attendance') },
     { key: 'schedule', label: t('nav.schedule') },
+    { key: 'leave', label: t('nav.leave') },
   ];
 
   // Secondary navigation items (grouped in "More" menu)
@@ -582,6 +584,7 @@ export default function StockManagerDashboard() {
         {activeView === 'schedule' && <ManagerShiftSchedulePage />}
         {activeView === 'scheduleManagement' && <ShiftSchedulePage />}
         {activeView === 'adjustment' && <ManagerAttendanceAdjustment />}
+        {activeView === 'leave' && <LeavePage />}
         {activeView === 'payslips' && <ManagerPayslipsPage />}
         {activeView === 'profile' && <StockManagerProfile />}
       </main>

@@ -8,7 +8,7 @@ import { companyService, Company } from '../../services/api/companyService';
 import { policyService, Policy } from '../../services/api/policyService';
 import { employeeService, Employee } from '../../services/api/employeeService';
 import { attendanceService, AttendanceAdjustment } from '../../services/api/attendanceService';
-import { leaveService, LeaveRequest, LeaveType } from '../../services/api/leaveService';
+import { leaveService, LeaveRequest, LeaveType, LeaveBalance } from '../../services/api/leaveService';
 import { overtimeService, OvertimeRequest } from '../../services/api/overtimeService';
 import { Button } from '../../components/common/Button';
 import { ToastContainer } from '../../components/common/Toast';
@@ -420,6 +420,8 @@ function PolicyManagement() {
       queryClient.invalidateQueries({ queryKey: ['attendancePolicy'] });
       queryClient.invalidateQueries({ queryKey: ['overtimePolicy'] });
       queryClient.invalidateQueries({ queryKey: ['payrollConfig'] });
+      // Invalidate leave balances when leave policy changes
+      queryClient.invalidateQueries({ queryKey: ['leaveBalance'] });
     },
     onError: (error: any) => {
       toast.showToast(error.response?.data?.message || t('common.error'), 'error');
@@ -440,6 +442,8 @@ function PolicyManagement() {
       queryClient.invalidateQueries({ queryKey: ['attendancePolicy'] });
       queryClient.invalidateQueries({ queryKey: ['overtimePolicy'] });
       queryClient.invalidateQueries({ queryKey: ['payrollConfig'] });
+      // Invalidate leave balances when leave policy changes
+      queryClient.invalidateQueries({ queryKey: ['leaveBalance'] });
     },
     onError: (error: any) => {
       toast.showToast(error.response?.data?.message || t('common.error'), 'error');
@@ -542,9 +546,11 @@ function PolicyManagement() {
         };
       case 'LEAVE_POLICY':
         return {
+          accrualMethod: 'MONTHLY',
           maxCarryoverDays: 5,
           requireApproval: true,
           allowOverlapping: false,
+          manualQuotaEnabled: false,
         };
       case 'PAYROLL_CONFIG':
         return {
@@ -2801,6 +2807,252 @@ function OwnerApprovalHistory() {
   );
 }
 
+// Employee Leave Quota Management Component
+function EmployeeLeaveQuotaManagement() {
+  const { t, i18n } = useTranslation();
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [editingQuota, setEditingQuota] = useState<{ employeeId: string; leaveTypeId: string } | null>(null);
+  const [quotaValue, setQuotaValue] = useState<string>('');
+
+  // Fetch leave policy to check if manual quota is enabled - refetch when policy is updated
+  const { data: leavePolicy } = useQuery<Policy>({
+    queryKey: ['leavePolicy'],
+    queryFn: () => policyService.getByType('LEAVE_POLICY'),
+    retry: false,
+    staleTime: 0, // Always fetch fresh to reflect policy changes
+  });
+
+  const policyConfig = leavePolicy?.config || {};
+  const manualQuotaEnabled = policyConfig.manualQuotaEnabled || false;
+
+  // Fetch employees
+  const { data: employees = [] } = useQuery<Employee[]>({
+    queryKey: ['employees'],
+    queryFn: () => employeeService.getAll(),
+  });
+
+  // Fetch leave types - refetch when leave types are updated
+  const { data: leaveTypes = [] } = useQuery<LeaveType[]>({
+    queryKey: ['leaveTypes', 'all'],
+    queryFn: () => leaveService.getLeaveTypes(true),
+    staleTime: 0, // Always fetch fresh to reflect leave type changes
+  });
+
+  // Fetch balances for all employees
+  // Refetch when employees, leave types, or leave policy change
+  // This ensures changes in leave quota management and policy are reflected
+  const [employeeBalances, setEmployeeBalances] = useState<Map<string, Map<string, LeaveBalance>>>(new Map());
+
+  useEffect(() => {
+    const fetchBalances = async () => {
+      const balancesMap = new Map<string, Map<string, LeaveBalance>>();
+      
+      for (const emp of employees.filter(e => e.status === 'ACTIVE')) {
+        const empBalances = new Map<string, LeaveBalance>();
+        for (const leaveType of leaveTypes.filter(lt => lt.isActive)) {
+          try {
+            const balance = await leaveService.getBalance(leaveType.id, emp.id);
+            empBalances.set(leaveType.id, balance);
+          } catch (error) {
+            // Balance might not exist yet
+          }
+        }
+        balancesMap.set(emp.id, empBalances);
+      }
+      
+      setEmployeeBalances(balancesMap);
+    };
+
+    if (employees.length > 0 && leaveTypes.length > 0) {
+      fetchBalances();
+    }
+  }, [employees, leaveTypes, leavePolicy]);
+
+  const setQuotaMutation = useMutation({
+    mutationFn: leaveService.setManualQuota,
+    onSuccess: () => {
+      toast.showToast(t('owner.manualQuotaSet'), 'success');
+      setEditingQuota(null);
+      setQuotaValue('');
+      queryClient.invalidateQueries({ queryKey: ['leaveBalance'] });
+      // Refetch balances
+      const fetchBalances = async () => {
+        const balancesMap = new Map<string, Map<string, LeaveBalance>>();
+        for (const emp of employees.filter(e => e.status === 'ACTIVE')) {
+          const empBalances = new Map<string, LeaveBalance>();
+          for (const leaveType of leaveTypes.filter(lt => lt.isActive)) {
+            try {
+              const balance = await leaveService.getBalance(leaveType.id, emp.id);
+              empBalances.set(leaveType.id, balance);
+            } catch (error) {
+              // Balance might not exist yet
+            }
+          }
+          balancesMap.set(emp.id, empBalances);
+        }
+        setEmployeeBalances(balancesMap);
+      };
+      fetchBalances();
+    },
+    onError: (error: any) => {
+      toast.showToast(error.response?.data?.message || t('common.error'), 'error');
+    },
+  });
+
+  const handleEdit = (employeeId: string, leaveTypeId: string) => {
+    setEditingQuota({ employeeId, leaveTypeId });
+    const balance = employeeBalances.get(employeeId)?.get(leaveTypeId);
+    // If no balance exists, use maxBalance from leave type as default
+    const leaveType = leaveTypes.find(lt => lt.id === leaveTypeId);
+    const defaultValue = balance 
+      ? String(balance.balance) 
+      : (leaveType?.maxBalance ? String(leaveType.maxBalance) : '0');
+    setQuotaValue(defaultValue);
+  };
+
+  const handleSave = () => {
+    if (!editingQuota) return;
+    
+    const balance = parseFloat(quotaValue);
+    if (isNaN(balance) || balance < 0) {
+      toast.showToast(t('owner.invalidQuotaValue'), 'error');
+      return;
+    }
+
+    setQuotaMutation.mutate({
+      employeeId: editingQuota.employeeId,
+      leaveTypeId: editingQuota.leaveTypeId,
+      balance,
+    });
+  };
+
+  const getLeaveTypeName = (type: LeaveType): string => {
+    const currentLang = i18n.language;
+    if (currentLang === 'id' && type.nameId) {
+      return type.nameId;
+    }
+    return type.name;
+  };
+
+  if (!manualQuotaEnabled) {
+    return (
+      <div className="p-6">
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+          <p className="text-yellow-800">
+            {t('owner.manualQuotaNotEnabled')}
+          </p>
+          <p className="text-sm text-yellow-700 mt-2">
+            {t('owner.enableManualQuotaInPolicy')}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const activeEmployees = employees.filter(e => e.status === 'ACTIVE');
+  const activeLeaveTypes = leaveTypes.filter(lt => lt.isActive);
+
+  return (
+    <div className="p-6">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold mb-2">{t('owner.employeeLeaveQuota')}</h1>
+        <p className="text-gray-600 text-sm">{t('owner.employeeLeaveQuotaDescription')}</p>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  {t('owner.employee')}
+                </th>
+                {activeLeaveTypes.map((type) => (
+                  <th key={type.id} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {getLeaveTypeName(type)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {activeEmployees.map((employee) => (
+                <tr key={employee.id}>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-medium text-gray-900">
+                      {employee.firstName} {employee.lastName}
+                    </div>
+                    <div className="text-sm text-gray-500">{employee.employeeCode}</div>
+                  </td>
+                  {activeLeaveTypes.map((type) => {
+                    const balance = employeeBalances.get(employee.id)?.get(type.id);
+                    const isEditing = editingQuota?.employeeId === employee.id && editingQuota?.leaveTypeId === type.id;
+                    
+                    return (
+                      <td key={type.id} className="px-6 py-4 whitespace-nowrap">
+                        {isEditing ? (
+                          <div className="flex items-center gap-2">
+                            <div className="flex flex-col">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.5"
+                                value={quotaValue}
+                                onChange={(e) => setQuotaValue(e.target.value)}
+                                className="w-20 p-1 border rounded text-sm"
+                                placeholder={type.maxBalance ? String(type.maxBalance) : undefined}
+                                autoFocus
+                              />
+                              {type.maxBalance && (
+                                <span className="text-xs text-gray-500 mt-0.5">
+                                  Max: {type.maxBalance}
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              onClick={handleSave}
+                              className="text-green-600 hover:text-green-800 text-sm"
+                              disabled={setQuotaMutation.isPending}
+                            >
+                              ✓
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingQuota(null);
+                                setQuotaValue('');
+                              }}
+                              className="text-red-600 hover:text-red-800 text-sm"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-900">
+                              {balance ? Number(balance.balance).toFixed(2) : '0.00'}
+                            </span>
+                            <button
+                              onClick={() => handleEdit(employee.id, type.id)}
+                              className="text-blue-600 hover:text-blue-800 text-sm"
+                              title={t('owner.editQuota')}
+                            >
+                              ✏️
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Leave Type Management Component
 function LeaveTypeManagement() {
   const { t, i18n } = useTranslation();
@@ -2855,6 +3107,8 @@ function LeaveTypeManagement() {
       toast.showToast(t('owner.leaveTypeUpdated'), 'success');
       setEditingType(null);
       queryClient.invalidateQueries({ queryKey: ['leaveTypes'] });
+      // Also invalidate leave balances so employee quota page reflects changes
+      queryClient.invalidateQueries({ queryKey: ['leaveBalance'] });
     },
     onError: (error: any) => {
       toast.showToast(error.response?.data?.message || t('common.error'), 'error');
@@ -3123,13 +3377,13 @@ export default function OwnerDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   
   // Get initial view from URL or default to 'company'
-  const getInitialView = (): 'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' | 'profile' => {
+  const getInitialView = (): 'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' | 'employeeQuota' | 'profile' => {
     const tab = searchParams.get('tab');
-    const validViews = ['company', 'policy', 'employees', 'payroll', 'shiftSchedule', 'reports', 'audit', 'approvals', 'approvalHistory', 'leaveQuota', 'profile'];
+    const validViews = ['company', 'policy', 'employees', 'payroll', 'shiftSchedule', 'reports', 'audit', 'approvals', 'approvalHistory', 'leaveQuota', 'employeeQuota', 'profile'];
     return (tab && validViews.includes(tab)) ? tab as any : 'company';
   };
   
-  const [activeView, setActiveView] = useState<'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' | 'profile'>(getInitialView());
+  const [activeView, setActiveView] = useState<'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' | 'employeeQuota' | 'profile'>(getInitialView());
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const isInitialMount = useRef(true);
@@ -3184,7 +3438,7 @@ export default function OwnerDashboard() {
   });
 
   // Update URL when activeView changes
-  const handleViewChange = (view: 'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' | 'profile') => {
+  const handleViewChange = (view: 'company' | 'policy' | 'employees' | 'payroll' | 'shiftSchedule' | 'reports' | 'audit' | 'approvals' | 'approvalHistory' | 'leaveQuota' | 'employeeQuota' | 'profile') => {
     setActiveView(view);
     setSearchParams({ tab: view }, { replace: true });
   };
@@ -3225,6 +3479,7 @@ export default function OwnerDashboard() {
     { key: 'approvals', label: t('owner.approvalInbox') },
     { key: 'approvalHistory', label: t('owner.approvalHistory') },
     { key: 'leaveQuota', label: t('owner.leaveQuotaManagement') },
+    { key: 'employeeQuota', label: t('owner.employeeLeaveQuota') },
     { key: 'audit', label: t('owner.auditLogs') },
   ];
 
@@ -3385,6 +3640,7 @@ export default function OwnerDashboard() {
         {activeView === 'approvals' && <OwnerApprovalInbox />}
         {activeView === 'approvalHistory' && <OwnerApprovalHistory />}
         {activeView === 'leaveQuota' && <LeaveTypeManagement />}
+        {activeView === 'employeeQuota' && <EmployeeLeaveQuotaManagement />}
         {activeView === 'profile' && <ProfilePage />}
       </main>
 

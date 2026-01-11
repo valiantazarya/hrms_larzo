@@ -21,6 +21,7 @@ import { UserAgent } from '../common/decorators/user-agent.decorator';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { UpdateLeaveTypeDto } from './dto/update-leave-type.dto';
+import { SetManualQuotaDto } from './dto/set-manual-quota.dto';
 
 @Controller('leave')
 @UseGuards(JwtAuthGuard)
@@ -87,7 +88,7 @@ export class LeaveController {
   }
 
   @Post('requests')
-  @Roles(Role.EMPLOYEE)
+  @Roles(Role.EMPLOYEE, Role.STOCK_MANAGER, Role.SUPERVISOR)
   @UseGuards(RolesGuard)
   async createLeaveRequest(
     @CurrentUser() user: any,
@@ -128,7 +129,7 @@ export class LeaveController {
   }
 
   @Put('requests/:id')
-  @Roles(Role.EMPLOYEE)
+  @Roles(Role.EMPLOYEE, Role.STOCK_MANAGER, Role.SUPERVISOR)
   @UseGuards(RolesGuard)
   async updateLeaveRequest(
     @Param('id') id: string,
@@ -145,7 +146,7 @@ export class LeaveController {
   }
 
   @Delete('requests/:id')
-  @Roles(Role.EMPLOYEE)
+  @Roles(Role.EMPLOYEE, Role.STOCK_MANAGER, Role.SUPERVISOR)
   @UseGuards(RolesGuard)
   async deleteLeaveRequest(
     @Param('id') id: string,
@@ -158,6 +159,26 @@ export class LeaveController {
       throw new BadRequestException('Employee not found');
     }
     return this.leaveService.deleteLeaveRequest(id, employeeId, user.id, ipAddress, userAgent);
+  }
+
+  @Post('quota/manual')
+  @Roles(Role.OWNER)
+  @UseGuards(RolesGuard)
+  async setManualQuota(
+    @CurrentUser() user: any,
+    @Body() setQuotaDto: SetManualQuotaDto,
+  ) {
+    const companyId = user.employee?.companyId;
+    if (!companyId) {
+      throw new BadRequestException('Company not found');
+    }
+    return this.leaveService.setManualQuota(
+      setQuotaDto.employeeId,
+      setQuotaDto.leaveTypeId,
+      setQuotaDto.balance,
+      user.id,
+      companyId,
+    );
   }
 }
 

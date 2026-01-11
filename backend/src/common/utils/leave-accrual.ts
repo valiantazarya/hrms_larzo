@@ -45,8 +45,8 @@ export function calculateLeaveAccrual(
 
   // Handle carryover
   let carriedOver = new Decimal(0);
-  if (leaveType.carryoverAllowed && periodMonth === 1 && previousYearBalance) {
-    // January: carryover from previous year
+  if (leaveType.carryoverAllowed && periodMonth === 7 && previousYearBalance) {
+    // July: carryover from previous year (June balance)
     const maxCarryover = leaveType.carryoverMax
       ? new Decimal(leaveType.carryoverMax)
       : new Decimal(0);

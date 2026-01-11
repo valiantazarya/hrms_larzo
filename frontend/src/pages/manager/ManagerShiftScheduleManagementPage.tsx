@@ -128,12 +128,15 @@ export default function ManagerShiftScheduleManagementPage() {
   const schedules: ShiftSchedule[] = Array.isArray(schedulesData) ? schedulesData : [];
 
   // Fetch approved leave requests for all employees in the date range
+  // Only fetch for direct reports (exclude manager themselves to avoid 403 errors)
   const { data: allLeaveRequests = [] } = useQuery<LeaveRequest[]>({
     queryKey: ['leaveRequests', 'all', startDate, endDate, user?.employee?.id],
     queryFn: async () => {
       if (employees.length === 0) return [];
       const allLeaves: LeaveRequest[] = [];
-      for (const emp of employees) {
+      // Filter to only direct reports (exclude manager themselves)
+      const directReports = employees.filter(emp => emp.managerId === user?.employee?.id);
+      for (const emp of directReports) {
         try {
           const requests = await leaveService.getRequests(emp.id);
           // Filter approved leaves that overlap with the date range
@@ -534,9 +537,16 @@ export default function ManagerShiftScheduleManagementPage() {
                     ? weekSchedulesData 
                     : [];
                   
-                  // Fetch approved leaves for all employees in the week
+                  // Get employees to export (filtered by role - exclude OWNER and MANAGER)
+                  let employeesToExport = employees.filter(emp => 
+                    emp.status === 'ACTIVE' && 
+                    emp.user?.role !== 'OWNER' &&
+                    emp.user?.role !== 'MANAGER'
+                  );
+                  
+                  // Fetch approved leaves only for employees to export (to avoid 403 errors)
                   const allWeekLeaves: LeaveRequest[] = [];
-                  for (const emp of employees) {
+                  for (const emp of employeesToExport) {
                     try {
                       const requests = await leaveService.getRequests(emp.id);
                       const approvedLeaves = requests.filter(req => {
@@ -547,7 +557,7 @@ export default function ManagerShiftScheduleManagementPage() {
                       });
                       allWeekLeaves.push(...approvedLeaves);
                     } catch (error) {
-                      // Skip if no access
+                      // Skip if no access (shouldn't happen since we filtered employees, but just in case)
                     }
                   }
                   
@@ -571,9 +581,6 @@ export default function ManagerShiftScheduleManagementPage() {
                       current = current.plus({ days: 1 });
                     }
                   });
-                  
-                  // Get employees to export (filtered by role)
-                  let employeesToExport = employees.filter(emp => emp.status === 'ACTIVE');
                   
                   // Sort employees by name
                   employeesToExport.sort((a, b) => {

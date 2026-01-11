@@ -78,7 +78,13 @@ export const leaveService = {
     return response.data;
   },
 
-  async getBalance(leaveTypeId: string): Promise<LeaveBalance> {
+  async getBalance(leaveTypeId: string, employeeId?: string): Promise<LeaveBalance> {
+    if (employeeId) {
+      const response = await apiClient.get(`/leave/balance/${employeeId}`, {
+        params: { leaveTypeId },
+      });
+      return response.data;
+    }
     const response = await apiClient.get('/leave/balance', {
       params: { leaveTypeId },
     });
@@ -127,6 +133,15 @@ export const leaveService = {
 
   async deleteRequest(id: string): Promise<void> {
     await apiClient.delete(`/leave/requests/${id}`);
+  },
+
+  async setManualQuota(data: {
+    employeeId: string;
+    leaveTypeId: string;
+    balance: number;
+  }): Promise<LeaveBalance> {
+    const response = await apiClient.post('/leave/quota/manual', data);
+    return response.data;
   },
 };
 

@@ -68,8 +68,8 @@ export default function ManagerAttendanceAdjustment() {
     return [userEmployee];
   }, [allEmployees, userEmployee, user?.role]);
 
-  // Auto-select employee for employees and supervisors (they can only select themselves)
-  const isEmployeeOrSupervisor = user?.role === 'EMPLOYEE' || user?.role === 'SUPERVISOR';
+  // Auto-select employee for employees, supervisors, and stock managers (they can only select themselves)
+  const isEmployeeOrSupervisor = user?.role === 'EMPLOYEE' || user?.role === 'SUPERVISOR' || user?.role === 'STOCK_MANAGER';
   useEffect(() => {
     if (isEmployeeOrSupervisor && userEmployee && !selectedEmployeeId) {
       setSelectedEmployeeId(userEmployee.id);
@@ -246,7 +246,7 @@ export default function ManagerAttendanceAdjustment() {
         <p className="text-gray-600 text-sm">{t('attendance.adjustmentDescription')}</p>
       </div>
 
-      {/* Employee Selection - Hidden for employees and supervisors (they can only select themselves) */}
+      {/* Employee Selection - Hidden for employees, supervisors, and stock managers (they can only select themselves) */}
       {!isEmployeeOrSupervisor && (
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
           <label className="block text-sm font-medium mb-2">
