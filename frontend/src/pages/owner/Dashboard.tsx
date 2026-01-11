@@ -3416,46 +3416,66 @@ export default function OwnerDashboard() {
   });
 
   // Count pending approvals
+  // Optimized: Batch requests to avoid N+1 query problem
   const { data: pendingApprovalsCount = 0 } = useQuery<number>({
     queryKey: ['pendingApprovalsCount', 'owner'],
     queryFn: async () => {
       if (employees.length === 0) return 0;
       let count = 0;
       
-      // Count pending attendance adjustments
-      for (const emp of employees) {
-        try {
-          const adjustments = await attendanceService.getAdjustments(emp.id);
-          count += adjustments.filter(a => a.status === 'PENDING').length;
-        } catch (error) {
-          // Skip if no access
-        }
+      // Batch requests to avoid overwhelming the server
+      const batchSize = 10;
+      
+      // Count pending attendance adjustments (batched)
+      for (let i = 0; i < employees.length; i += batchSize) {
+        const batch = employees.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (emp) => {
+          try {
+            const adjustments = await attendanceService.getAdjustments(emp.id);
+            return adjustments.filter(a => a.status === 'PENDING').length;
+          } catch (error) {
+            return 0;
+          }
+        });
+        const batchResults = await Promise.all(batchPromises);
+        count += batchResults.reduce((sum, val) => sum + val, 0);
       }
       
-      // Count pending leave requests
-      for (const emp of employees) {
-        try {
-          const requests = await leaveService.getRequests(emp.id);
-          count += requests.filter(r => r.status === 'PENDING').length;
-        } catch (error) {
-          // Skip if no access
-        }
+      // Count pending leave requests (batched)
+      for (let i = 0; i < employees.length; i += batchSize) {
+        const batch = employees.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (emp) => {
+          try {
+            const requests = await leaveService.getRequests(emp.id);
+            return requests.filter(r => r.status === 'PENDING').length;
+          } catch (error) {
+            return 0;
+          }
+        });
+        const batchResults = await Promise.all(batchPromises);
+        count += batchResults.reduce((sum, val) => sum + val, 0);
       }
       
-      // Count pending overtime requests
-      for (const emp of employees) {
-        try {
-          const requests = await overtimeService.getRequests(emp.id);
-          count += requests.filter(r => r.status === 'PENDING').length;
-        } catch (error) {
-          // Skip if no access
-        }
+      // Count pending overtime requests (batched)
+      for (let i = 0; i < employees.length; i += batchSize) {
+        const batch = employees.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (emp) => {
+          try {
+            const requests = await overtimeService.getRequests(emp.id);
+            return requests.filter(r => r.status === 'PENDING').length;
+          } catch (error) {
+            return 0;
+          }
+        });
+        const batchResults = await Promise.all(batchPromises);
+        count += batchResults.reduce((sum, val) => sum + val, 0);
       }
       
       return count;
     },
     enabled: employees.length > 0,
     refetchInterval: 30000, // Refetch every 30 seconds to keep count updated
+    staleTime: 10 * 1000, // Cache for 10 seconds to avoid excessive refetching
   });
 
   // Update URL when activeView changes

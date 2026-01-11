@@ -136,32 +136,42 @@ export default function ShiftSchedulePage() {
 
   // Fetch approved leave requests for all employees in the date range
   // For STOCK_MANAGER, only fetch for employees they have access to (already filtered in employees array)
+  // Only fetch when we have employees and valid date range to avoid unnecessary API calls
   const { data: allLeaveRequests = [] } = useQuery<LeaveRequest[]>({
     queryKey: ['leaveRequests', 'all', startDate, endDate, user?.role],
     queryFn: async () => {
       if (employees.length === 0) return [];
       const allLeaves: LeaveRequest[] = [];
-      for (const emp of employees) {
-        try {
-          const requests = await leaveService.getRequests(emp.id);
-          // Filter approved leaves that overlap with the date range
-          const approvedLeaves = requests.filter(req => {
-            if (req.status !== 'APPROVED') return false;
-            const leaveStart = DateTime.fromISO(req.startDate).setZone('Asia/Jakarta');
-            const leaveEnd = DateTime.fromISO(req.endDate).setZone('Asia/Jakarta');
-            const rangeStart = DateTime.fromISO(startDate).setZone('Asia/Jakarta');
-            const rangeEnd = DateTime.fromISO(endDate).setZone('Asia/Jakarta');
-            // Check if leave overlaps with date range
-            return leaveStart <= rangeEnd && leaveEnd >= rangeStart;
-          });
-          allLeaves.push(...approvedLeaves);
-        } catch (error) {
-          // Skip if no access or error
-        }
+      // Use Promise.all with limited concurrency to avoid overwhelming the server
+      const batchSize = 10;
+      for (let i = 0; i < employees.length; i += batchSize) {
+        const batch = employees.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (emp) => {
+          try {
+            const requests = await leaveService.getRequests(emp.id);
+            // Filter approved leaves that overlap with the date range
+            const approvedLeaves = requests.filter(req => {
+              if (req.status !== 'APPROVED') return false;
+              const leaveStart = DateTime.fromISO(req.startDate).setZone('Asia/Jakarta');
+              const leaveEnd = DateTime.fromISO(req.endDate).setZone('Asia/Jakarta');
+              const rangeStart = DateTime.fromISO(startDate).setZone('Asia/Jakarta');
+              const rangeEnd = DateTime.fromISO(endDate).setZone('Asia/Jakarta');
+              // Check if leave overlaps with date range
+              return leaveStart <= rangeEnd && leaveEnd >= rangeStart;
+            });
+            return approvedLeaves;
+          } catch (error) {
+            // Skip if no access or error
+            return [];
+          }
+        });
+        const batchResults = await Promise.all(batchPromises);
+        allLeaves.push(...batchResults.flat());
       }
       return allLeaves;
     },
     enabled: employees.length > 0 && !!startDate && !!endDate,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes to avoid refetching on every render
   });
 
   // Create a map of approved leaves by employeeId and date
