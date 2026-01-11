@@ -2854,8 +2854,10 @@ function EmployeeLeaveQuotaManagement() {
           try {
             const balance = await leaveService.getBalance(leaveType.id, emp.id);
             empBalances.set(leaveType.id, balance);
-          } catch (error) {
-            // Balance might not exist yet
+          } catch (error: any) {
+            // Log error for debugging but don't break the loop
+            console.error(`Failed to fetch balance for employee ${emp.id}, leave type ${leaveType.id}:`, error);
+            // Balance might not exist yet or employee/leave type might be invalid
           }
         }
         balancesMap.set(emp.id, empBalances);
@@ -2885,8 +2887,10 @@ function EmployeeLeaveQuotaManagement() {
             try {
               const balance = await leaveService.getBalance(leaveType.id, emp.id);
               empBalances.set(leaveType.id, balance);
-            } catch (error) {
-              // Balance might not exist yet
+            } catch (error: any) {
+              // Log error for debugging but don't break the loop
+              console.error(`Failed to fetch balance for employee ${emp.id}, leave type ${leaveType.id}:`, error);
+              // Balance might not exist yet or employee/leave type might be invalid
             }
           }
           balancesMap.set(emp.id, empBalances);

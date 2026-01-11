@@ -91,6 +91,15 @@ export class LeaveService {
     const currentYear = now.year;
     const currentMonth = now.month;
 
+    // Validate employee exists
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+    });
+
+    if (!employee) {
+      throw new NotFoundException('Employee not found');
+    }
+
     // Always get the current leave type settings (to reflect owner's quota changes)
     const leaveType = await this.prisma.leaveType.findUnique({
       where: { id: leaveTypeId },
@@ -100,16 +109,28 @@ export class LeaveService {
       throw new NotFoundException('Leave type not found');
     }
 
+    // Validate employee belongs to same company as leave type
+    if (employee.companyId !== leaveType.companyId) {
+      throw new BadRequestException('Employee and leave type must belong to the same company');
+    }
+
     // Get leave policy to check accrual method and manual quota settings
     let accrualMethod: string | null = null;
     let manualQuotaEnabled: boolean = false;
     try {
+      if (!leaveType.companyId) {
+        throw new BadRequestException('Leave type must have a company ID');
+      }
       const leavePolicy = await this.policyService.findByType(leaveType.companyId, PolicyType.LEAVE_POLICY);
       accrualMethod = leavePolicy.config?.accrualMethod || null;
       manualQuotaEnabled = leavePolicy.config?.manualQuotaEnabled || false;
-    } catch (error) {
-      // Policy might not exist, use default behavior (normal accrual)
+    } catch (error: any) {
+      // Policy might not exist (NotFoundException), use default behavior (normal accrual)
       // This is expected if policy hasn't been set up yet
+      // Only log if it's not a NotFoundException
+      if (error?.status !== 404 && error?.constructor?.name !== 'NotFoundException') {
+        console.error('Error fetching leave policy:', error);
+      }
     }
 
     // Get existing balance for current period
@@ -196,17 +217,22 @@ export class LeaveService {
       // Always recalculate balance based on current leave type settings
       // This ensures balances reflect owner's quota changes
       // Use previous month's balance (or null) to recalculate accrual for current month
-      accrualResult = calculateLeaveAccrual(
-        leaveType,
-        previousBalance, // Use previous month's balance to recalculate accrual
-        currentYear,
-        currentMonth,
-        previousYearBalance, // For carryover calculation in July
-      );
+      try {
+        accrualResult = calculateLeaveAccrual(
+          leaveType,
+          previousBalance, // Use previous month's balance to recalculate accrual
+          currentYear,
+          currentMonth,
+          previousYearBalance, // For carryover calculation in July
+        );
 
-      // Calculate final balance: total available balance minus current month's used
-      // The accrualResult.balance is the total available balance (after accrual, carryover, expiry, and maxBalance cap, but before current month's used)
-      finalBalance = accrualResult.balance.sub(usedAmount);
+        // Calculate final balance: total available balance minus current month's used
+        // The accrualResult.balance is the total available balance (after accrual, carryover, expiry, and maxBalance cap, but before current month's used)
+        finalBalance = accrualResult.balance.sub(usedAmount);
+      } catch (error: any) {
+        console.error('Error calculating leave accrual:', error);
+        throw new BadRequestException(`Failed to calculate leave balance: ${error.message || 'Unknown error'}`);
+      }
     }
 
     if (balance) {
